@@ -1,0 +1,15 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: v4.5.2
+_src_path: https://github.com/jupyterlab/extension-template
+author_email: y.mahan@gmail.com
+author_name: yun
+has_ai_rules: false
+has_binder: false
+has_settings: false
+kind: frontend-and-server
+labextension_name: notebookmind
+project_short_description: Gamified learning layer for Jupyter Notebooks
+python_name: notebookmind
+repository: https://github.com/yun/notebookmind
+test: false
+

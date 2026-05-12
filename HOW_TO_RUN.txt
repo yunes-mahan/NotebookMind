@@ -1,0 +1,121 @@
+================================================================
+  NOTEBOOKMIND — HOW TO START & PROJECT STRUCTURE
+================================================================
+
+----------------------------------------------------------------
+  HOW TO START
+----------------------------------------------------------------
+
+1. Open PowerShell
+2. Navigate to the project folder:
+      cd C:\Users\yunes\Desktop\PI
+
+3. Run the launch script:
+      .\start.ps1
+
+4. Your browser opens automatically at:
+      http://localhost:8888/lab
+
+   If it doesn't open, copy the URL from the terminal output
+   (it includes a token, e.g. http://localhost:8888/lab?token=...)
+
+5. The NotebookMind LOGIN SCREEN appears.
+   Click  🚀 Enter NotebookMind  — no password needed (demo mode).
+
+6. The 📓 panel appears in the RIGHT SIDEBAR.
+   If the sidebar is hidden, click the ► arrow on the right edge.
+
+7. Open test_analysis.ipynb to test all features.
+
+
+AFTER ANY CODE CHANGE — REBUILD:
+   .\venv\Scripts\jlpm.exe build
+   Copy-Item notebookmind\labextension -Destination venv\share\jupyter\labextensions\notebookmind -Recurse -Force
+   Then restart JupyterLab.
+
+
+----------------------------------------------------------------
+  PROJECT STRUCTURE
+----------------------------------------------------------------
+
+PI/
+│
+├── start.ps1                  ← Launch script (sets API keys + starts JupyterLab)
+├── HOW_TO_RUN.txt             ← This file
+├── test_analysis.ipynb        ← Sample notebook for testing NotebookMind
+│
+├── src/                       ← All TypeScript frontend source files
+│   ├── index.ts               ← Plugin entry point (registers everything)
+│   ├── panel.ts               ← Main right sidebar panel with 5 tabs
+│   ├── cellPanel.ts           ← Learn tab: shows cell code + AI explanation
+│   ├── quiz.ts                ← Quiz tab: predict output / fix bug / fill blank
+│   ├── flashcard.ts           ← Cards tab: flashcard flip + spaced repetition
+│   ├── leaderboard.ts         ← Board tab: leaderboard (mock data)
+│   ├── heatmap.ts             ← Stats tab: complexity heatmap
+│   ├── dependencyGraph.ts     ← Stats tab: Mermaid cell dependency diagram
+│   ├── abbreviationPanel.ts   ← Stats tab: detects import aliases (np, pd, etc.)
+│   ├── gemini.ts              ← All Gemini AI calls (explain, quiz, flashcards…)
+│   ├── auth.ts                ← Login widget (demo mode, no Supabase needed)
+│   ├── points.ts              ← Points engine + toast notifications
+│   ├── progressTracker.ts     ← Cell mastery state (mastered/pending/skipped)
+│   ├── supabase.ts            ← MOCK ONLY — no real Supabase calls
+│   ├── tts.ts                 ← ElevenLabs TTS placeholder (logs to console)
+│   └── request.ts             ← Helper to call the Python server extension
+│
+├── notebookmind/              ← Python server extension
+│   ├── __init__.py            ← Registers the server extension with JupyterLab
+│   ├── handlers.py            ← Serves /notebookmind/config endpoint
+│   └── config.py              ← Reads GEMINI_API_KEY etc. from environment
+│
+├── lib/                       ← Compiled JS output (auto-generated, gitignored)
+├── venv/                      ← Python virtual environment (gitignored)
+├── node_modules/              ← JS dependencies (gitignored)
+│
+├── package.json               ← JS dependencies & build scripts
+├── pyproject.toml             ← Python package config
+└── tsconfig.json              ← TypeScript compiler config
+
+
+----------------------------------------------------------------
+  HOW EACH TAB WORKS
+----------------------------------------------------------------
+
+📖 LEARN    Click any code cell → see it here → pick level →
+            click Explain → Gemini gives a plain-English explanation
+            (+1 pt)
+
+🧠 QUIZ     Pick a quiz type → Generate Quiz → Gemini creates a
+            multiple-choice question → answer it
+            (+2 pts correct, +5 pts for bug-fix quiz)
+
+🃏 CARDS    Generate Flashcards → 3 cards per cell → click to flip
+            → rate Hard / Okay / Easy
+            (+3 pts for Easy)
+
+🏆 BOARD    Leaderboard (mock data for now — connect Supabase for live)
+
+📊 STATS    Total points · cell mastery bar · complexity heatmap ·
+            dependency graph (Mermaid) · import alias detector
+
+
+----------------------------------------------------------------
+  API KEYS
+----------------------------------------------------------------
+
+GEMINI_API_KEY      Set in start.ps1 — required for all AI features
+ELEVENLABS_API_KEY  Leave blank for now (TTS is a placeholder)
+SUPABASE_URL        Leave as PLACEHOLDER (mock data used instead)
+SUPABASE_ANON_KEY   Leave as PLACEHOLDER
+
+
+----------------------------------------------------------------
+  POINTS REFERENCE
+----------------------------------------------------------------
+
+Explain a cell          +1 pt
+Quiz correct answer     +2 pts
+Bug-fix quiz correct    +5 pts
+Flashcard Easy          +3 pts
+Complete notebook       +30 pts (manual trigger, coming soon)
+
+================================================================
