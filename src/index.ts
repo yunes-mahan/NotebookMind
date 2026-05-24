@@ -3,10 +3,8 @@ import {
   JupyterFrontEndPlugin
 } from '@jupyterlab/application';
 
-import { INotebookTracker } from '@jupyterlab/notebook';
-
 import { requestAPI } from './request';
-import { NotebookMindPanel } from './panel';
+import { NotebookMindApp } from './nbApp';
 import { LoginWidget } from './auth';
 import { initGemini } from './gemini';
 import { ttsEngine } from './tts';
@@ -22,11 +20,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
   id: 'notebookmind:plugin',
   description: 'Gamified learning layer for Jupyter Notebooks',
   autoStart: true,
-  requires: [INotebookTracker],
-  activate: async (app: JupyterFrontEnd, tracker: INotebookTracker) => {
+  activate: async (app: JupyterFrontEnd) => {
     console.log('[NotebookMind] Activating…');
 
-    // 1. Fetch config from server extension
     let config: IConfig = {
       gemini_api_key: '',
       elevenlabs_api_key: '',
@@ -35,58 +31,53 @@ const plugin: JupyterFrontEndPlugin<void> = {
     };
 
     try {
-      config = await requestAPI<IConfig>('config', app.serviceManager.serverSettings);
-      console.log('[NotebookMind] Config loaded. Gemini key present:', !!config.gemini_api_key);
+      config = await requestAPI<IConfig>(
+        'config',
+        app.serviceManager.serverSettings
+      );
+      console.log(
+        '[NotebookMind] Config loaded. AI key present:',
+        !!config.gemini_api_key
+      );
     } catch (err) {
       console.error('[NotebookMind] Failed to fetch config from server:', err);
     }
 
-    // 2. Init Gemini
     if (config.gemini_api_key) {
       initGemini(config.gemini_api_key);
     }
-
-    // 3. Init TTS (placeholder)
     if (config.elevenlabs_api_key) {
       ttsEngine.setApiKey(config.elevenlabs_api_key);
     }
 
-    // 4. Show login wall — demo mode always succeeds
-    const loginWidget = new LoginWidget(() => {
-      loginWidget.node.remove();
-      _loadPanel();
+    let appWidget: NotebookMindApp | null = null;
+
+    const openApp = (): void => {
+      if (!appWidget || appWidget.isDisposed) {
+        appWidget = new NotebookMindApp(app.serviceManager);
+      }
+      if (!appWidget.isAttached) {
+        app.shell.add(appWidget, 'main');
+      }
+      app.shell.activateById(appWidget.id);
+    };
+
+    app.commands.addCommand('notebookmind:open', {
+      label: 'Open NotebookMind',
+      execute: () => openApp()
     });
 
-    // Attach to JupyterLab's main DOM so it renders over everything
+    // Demo login wall — always succeeds, then opens the full-screen app.
+    const loginWidget = new LoginWidget(() => {
+      loginWidget.node.remove();
+      openApp();
+    });
+
     const shellNode =
       document.querySelector('#main') ??
       document.querySelector('.jp-LabShell') ??
       document.body;
     shellNode.appendChild(loginWidget.node);
-
-    function _loadPanel(): void {
-      const panel = new NotebookMindPanel(tracker);
-
-      if (!config.gemini_api_key) {
-        panel.showError(
-          '<strong>GEMINI_API_KEY not set.</strong> ' +
-          'Restart JupyterLab with: ' +
-          '<code style="background:#FCA5A5;padding:2px 6px;border-radius:4px">GEMINI_API_KEY=your_key jupyter lab</code>'
-        );
-      } else {
-        panel.setGeminiReady(true);
-      }
-
-      app.shell.add(panel, 'right', { rank: 700 });
-      app.shell.activateById(panel.id);
-
-      // Populate with the currently active cell (if any)
-      const currentNb = tracker.currentWidget;
-      if (currentNb?.content.activeCell) {
-        const cell = currentNb.content.activeCell;
-        panel.updateCell(cell.model.sharedModel.source, cell.model.id);
-      }
-    }
   }
 };
 

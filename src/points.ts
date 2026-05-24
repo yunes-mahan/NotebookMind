@@ -33,19 +33,20 @@ export class PointsEngine {
       document.head.appendChild(style);
     }
     const toast = document.createElement('div');
-    toast.textContent = `+${amount} pts`;
+    toast.textContent = `+${amount} XP`;
     Object.assign(toast.style, {
       position: 'fixed',
       top: '80px',
       right: '24px',
       zIndex: '9999',
-      background: '#10B981',
+      background: 'var(--nm-accent, #2A6FDB)',
       color: 'white',
       padding: '8px 16px',
-      borderRadius: '20px',
+      borderRadius: '9999px',
       fontWeight: '600',
       fontSize: '14px',
-      boxShadow: '0 4px 12px rgba(16,185,129,0.4)',
+      fontFamily: 'var(--nm-font-sans, var(--nm-font, system-ui, sans-serif))',
+      boxShadow: '0 8px 24px rgba(15,15,12,0.10), 0 2px 4px rgba(15,15,12,0.05)',
       animation: 'nmFadeOut 2s forwards',
       pointerEvents: 'none'
     });

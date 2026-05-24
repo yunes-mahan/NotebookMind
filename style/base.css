@@ -1,5 +1,212 @@
-/*
-    See the JupyterLab Developer Guide for useful CSS Patterns:
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
 
-    https://jupyterlab.readthedocs.io/en/stable/developer/css.html
+/*
+  NotebookMind — Design System tokens (from "NotebookMind Design System").
+  Visual idiom inspired by attio.com: warm neutrals, one brand blue,
+  black primary buttons, Geist + Geist Mono, subtle layered shadows.
 */
+
+:root {
+  /* Neutrals (warm gray) */
+  --nm-bg: #fafaf7;
+  --nm-bg-elev-1: #ffffff;
+  --nm-bg-elev-2: #f4f3ef;
+  --nm-bg-inverse: #0e0e0c;
+
+  --nm-fg: #18181b;
+  --nm-fg-strong: #0a0a0a;
+  --nm-fg-muted: #57534e;
+  --nm-fg-subtle: #8a8780;
+
+  --nm-border: #e7e5e0;
+  --nm-border-strong: #d6d3cd;
+
+  /* Brand palette — primary orange, secondary pale green, accent olive */
+  --nm-primary: #fe7030;
+  --nm-primary-hover: #ec5f22;
+  --nm-secondary: #dee5b9;
+  --nm-secondary-hover: #d2dba6;
+  --nm-secondary-fg: #3a3f28;
+
+  --nm-accent: #515839;
+  --nm-accent-hover: #3f4530;
+  --nm-accent-soft: #e9edd9;
+  --nm-accent-fg: #ffffff;
+
+  /* Object-tag palette (low saturation) */
+  --nm-tag-rose: #c6435d;
+  --nm-tag-orange: #c9633a;
+  --nm-tag-amber: #b27b1f;
+  --nm-tag-lime: #5f8b27;
+  --nm-tag-teal: #1f857d;
+  --nm-tag-violet: #6b4fcf;
+  --nm-tag-pink: #b83b8c;
+  --nm-tag-slate: #4b5563;
+
+  /* Semantic */
+  --nm-success: #1f8a5b;
+  --nm-success-soft: #dcf0e5;
+  --nm-warning: #b27b1f;
+  --nm-warning-soft: #faf1d6;
+  --nm-danger: #c6435d;
+  --nm-danger-soft: #fce7ec;
+  --nm-info: #2a6fdb;
+  --nm-info-soft: #e8f0fc;
+
+  /* Type */
+  --nm-font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    Helvetica, Arial, sans-serif;
+  --nm-font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Radii */
+  --nm-radius-sm: 5px;
+  --nm-radius-md: 8px;
+  --nm-radius-lg: 12px;
+  --nm-radius-xl: 16px;
+  --nm-radius-2xl: 24px;
+  --nm-radius-pill: 9999px;
+
+  /* Shadows (subtle, layered — never colored glows) */
+  --nm-shadow-xs: 0 1px 1px rgba(15, 15, 12, 0.04);
+  --nm-shadow-sm: 0 1px 2px rgba(15, 15, 12, 0.05), 0 1px 1px rgba(15, 15, 12, 0.03);
+  --nm-shadow-md: 0 2px 4px rgba(15, 15, 12, 0.04), 0 4px 12px rgba(15, 15, 12, 0.05);
+  --nm-shadow-lg: 0 8px 24px rgba(15, 15, 12, 0.07), 0 2px 4px rgba(15, 15, 12, 0.04);
+  --nm-shadow-pop: 0 12px 32px rgba(15, 15, 12, 0.14), 0 2px 4px rgba(15, 15, 12, 0.06);
+
+  /* Motion */
+  --nm-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ── Legacy aliases used throughout the extension's inline styles ───── */
+  --nm-font: var(--nm-font-sans);
+  --nm-surface: var(--nm-bg-elev-1);
+  --nm-bg-subtle: var(--nm-bg-elev-2);
+  --nm-bg-section: #eeede8;
+
+  --nm-text: var(--nm-fg);
+  --nm-text-secondary: var(--nm-fg-muted);
+  --nm-text-muted: #6b6862;
+  --nm-text-faint: var(--nm-fg-subtle);
+
+  --nm-border-subtle: #efede9;
+
+  --nm-accent-light: var(--nm-accent-soft);
+  --nm-accent-border: #c6cf9f;
+  --nm-navy: var(--nm-bg-inverse);
+
+  --nm-radius: var(--nm-radius-md);
+
+  --nm-success-bg: var(--nm-success-soft);
+  --nm-success-text: #146647;
+  --nm-error: var(--nm-danger);
+  --nm-error-bg: var(--nm-danger-soft);
+  --nm-error-text: #9b2f45;
+  --nm-warn: var(--nm-warning);
+  --nm-warn-bg: var(--nm-warning-soft);
+  --nm-warn-text: #855b16;
+
+  --nm-code-bg: var(--nm-bg-elev-2);
+  --nm-code-text: var(--nm-fg);
+  --nm-code-border: var(--nm-border);
+
+  /* Primary action color (orange) */
+  --nm-btn-primary: var(--nm-primary);
+  --nm-btn-primary-hover: var(--nm-primary-hover);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   JupyterLab chrome — retint the whole app (file browser, notebook, toolbars)
+   :root:root raises specificity so we win over the bundled light theme.
+   ────────────────────────────────────────────────────────────────────────── */
+:root:root {
+  --jp-ui-font-family: var(--nm-font-sans);
+  --jp-content-font-family: var(--nm-font-sans);
+  --jp-code-font-family: var(--nm-font-mono);
+
+  --jp-ui-font-color0: var(--nm-fg-strong);
+  --jp-ui-font-color1: var(--nm-fg);
+  --jp-ui-font-color2: var(--nm-fg-muted);
+  --jp-ui-font-color3: var(--nm-fg-subtle);
+
+  --jp-content-font-color0: var(--nm-fg-strong);
+  --jp-content-font-color1: var(--nm-fg);
+  --jp-content-font-color2: var(--nm-fg-muted);
+  --jp-content-font-color3: var(--nm-fg-subtle);
+
+  --jp-layout-color0: #ffffff;
+  --jp-layout-color1: #ffffff;
+  --jp-layout-color2: var(--nm-bg-elev-2);
+  --jp-layout-color3: #eeede8;
+  --jp-layout-color4: var(--nm-border);
+
+  --jp-border-color0: var(--nm-border-strong);
+  --jp-border-color1: var(--nm-border);
+  --jp-border-color2: var(--nm-border-subtle);
+  --jp-border-color3: var(--nm-bg-elev-2);
+
+  --jp-brand-color0: var(--nm-accent-hover);
+  --jp-brand-color1: var(--nm-accent);
+  --jp-brand-color2: #8a8780;
+  --jp-brand-color3: var(--nm-accent-border);
+  --jp-brand-color4: var(--nm-accent-soft);
+  --jp-accent-color1: var(--nm-accent);
+
+  --jp-toolbar-background: #ffffff;
+  --jp-toolbar-border-color: var(--nm-border);
+
+  --jp-cell-editor-background: var(--nm-bg-elev-2);
+  --jp-cell-editor-border-color: var(--nm-border);
+  --jp-cell-prompt-not-active-font-color: var(--nm-fg-subtle);
+
+  --jp-input-active-border-color: var(--nm-accent);
+  --jp-input-hover-border-color: var(--nm-border-strong);
+
+  --jp-sidebar-min-width: 220px;
+}
+
+/* Gentle chrome polish */
+body {
+  font-family: var(--nm-font-sans);
+}
+
+#main,
+.jp-LabShell {
+  background: var(--nm-bg);
+}
+
+#jp-top-panel,
+.jp-MenuBar,
+.lm-MenuBar {
+  background: #ffffff;
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.jp-SideBar {
+  background: var(--nm-bg-elev-2);
+}
+
+.jp-Toolbar {
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.jp-Button,
+.jp-mod-styled,
+button.bp3-button {
+  border-radius: var(--nm-radius-md);
+}
+
+.jp-DirListing-item {
+  border-radius: var(--nm-radius-sm);
+}
+
+.jp-DirListing-item.jp-mod-selected {
+  background: var(--nm-accent-soft);
+  color: var(--nm-fg);
+}
+
+.jp-LauncherCard {
+  border-radius: var(--nm-radius-md);
+}
+
+.nm-app {
+  font-family: var(--nm-font-sans);
+}
