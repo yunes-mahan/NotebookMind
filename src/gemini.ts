@@ -74,7 +74,7 @@ async function generateText(prompt: string): Promise<string> {
   if (!_genAI) {
     throw new Error('No API key initialized.');
   }
-  const model = _genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const model = _genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   const result = await model.generateContent(prompt);
   return result.response.text();
 }
