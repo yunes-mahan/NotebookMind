@@ -1,57 +1,96 @@
-// SUPABASE PLACEHOLDER — replace with real client when ready
-// import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient, Session, User } from '@supabase/supabase-js';
+
+let _client: SupabaseClient | null = null;
+let _session: Session | null = null;
+
+export function initSupabase(url: string, anonKey: string): void {
+  if (!url || url === 'PLACEHOLDER') {
+    return;
+  }
+  _client = createClient(url, anonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      storage: typeof localStorage !== 'undefined' ? localStorage : undefined
+    }
+  });
+  _client.auth.onAuthStateChange((_event, session) => {
+    _session = session;
+  });
+  _client.auth.getSession().then(({ data }) => {
+    _session = data.session;
+  });
+}
+
+export function getClient(): SupabaseClient | null {
+  return _client;
+}
+
+export function isConnected(): boolean {
+  return _client !== null;
+}
+
+export function getCurrentUser(): User | null {
+  return _session?.user ?? null;
+}
+
+export function getCurrentSession(): Session | null {
+  return _session;
+}
+
+export async function signIn(
+  email: string,
+  password: string
+): Promise<{ user: User | null; error: string | null }> {
+  if (!_client) {
+    return { user: null, error: 'Supabase not connected.' };
+  }
+  const { data, error } = await _client.auth.signInWithPassword({ email, password });
+  if (error) {
+    return { user: null, error: error.message };
+  }
+  _session = data.session;
+  return { user: data.user, error: null };
+}
+
+export async function signUp(
+  email: string,
+  password: string,
+  displayName: string
+): Promise<{ user: User | null; error: string | null }> {
+  if (!_client) {
+    return { user: null, error: 'Supabase not connected.' };
+  }
+  const { data, error } = await _client.auth.signUp({
+    email,
+    password,
+    options: { data: { display_name: displayName } }
+  });
+  if (error) {
+    return { user: null, error: error.message };
+  }
+  return { user: data.user, error: null };
+}
+
+export async function signOut(): Promise<void> {
+  if (_client) {
+    await _client.auth.signOut();
+  }
+  _session = null;
+}
+
+// ── Legacy mock exports (kept for compatibility) ─────────────
 
 export type CellState = 'mastered' | 'pending' | 'skipped';
 
-export interface IUser {
-  id: string;
-  email: string;
-  name: string;
-}
-
-export interface ILeaderboardEntry {
-  rank: number;
-  name: string;
-  points: number;
-  badge: string;
-}
-
-export interface IUserSettings {
-  level: 'beginner' | 'intermediate' | 'expert';
-  theme: 'light' | 'dark';
-}
-
-export function getUser(): IUser {
-  return { id: 'mock-user-1', email: 'student@demo.com', name: 'Demo Student' };
-}
-
-export function getLeaderboard(): ILeaderboardEntry[] {
-  return [
-    { rank: 1, name: 'Alice M.', points: 340, badge: '🏆' },
-    { rank: 2, name: 'Demo Student', points: 290, badge: '🥈' },
-    { rank: 3, name: 'Carlos R.', points: 210, badge: '🥉' },
-    { rank: 4, name: 'Priya K.', points: 185, badge: '' },
-    { rank: 5, name: 'Tom B.', points: 160, badge: '' },
-    { rank: 6, name: 'Sara L.', points: 140, badge: '' },
-    { rank: 7, name: 'James O.', points: 95, badge: '' },
-    { rank: 8, name: 'Mia C.', points: 60, badge: '' }
-  ];
-}
-
-export function getUserSettings(): IUserSettings {
-  return { level: 'beginner', theme: 'light' };
-}
-
-export function savePoints(userId: string, points: number): boolean {
-  console.log(`[NotebookMind] savePoints: user=${userId}, points=${points}`);
-  return true;
-}
-
-export function saveCellState(cellId: string, state: CellState): boolean {
-  console.log(`[NotebookMind] saveCellState: cell=${cellId}, state=${state}`);
-  return true;
-}
-
-export function getCellStates(): Map<string, CellState> {
-  return new Map<string, CellState>();
+export function getUser() {
+  const u = getCurrentUser();
+  if (u) {
+    return {
+      id: u.id,
+      email: u.email ?? '',
+      name: u.user_metadata?.display_name ?? u.email ?? 'Student'
+    };
+  }
+  return { id: 'demo', email: 'demo@notebookmind.app', name: 'Demo Student' };
 }

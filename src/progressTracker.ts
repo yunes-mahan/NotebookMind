@@ -1,4 +1,4 @@
-import { getCellStates, saveCellState } from './supabase';
+// Cell state tracking (in-memory; Supabase persistence wired via supabaseDB when needed)
 
 export type CellState = 'mastered' | 'pending' | 'skipped';
 
@@ -6,12 +6,11 @@ export class ProgressTracker {
   private _states: Map<string, CellState>;
 
   constructor() {
-    this._states = getCellStates() as Map<string, CellState>;
+    this._states = new Map<string, CellState>();
   }
 
   setState(cellId: string, state: CellState): void {
     this._states.set(cellId, state);
-    saveCellState(cellId, state);
     document.dispatchEvent(
       new CustomEvent('notebookmind:progress', {
         detail: { cellId, state, states: this._states }

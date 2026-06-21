@@ -89,7 +89,7 @@ function pageNum(el: HTMLElement, n: number, total: number): void {
   el.appendChild(p);
 }
 
-function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
+export function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
   const el = slideShell();
 
   if (s.kind === 'title') {

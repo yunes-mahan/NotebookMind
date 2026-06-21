@@ -93,7 +93,7 @@ export function makeCodeField(
         indentOnInput(),
         python(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([indentWithTab as any, ...(defaultKeymap as any), ...(historyKeymap as any)]),
         EditorView.lineWrapping,
         editableComp.of([
           EditorView.editable.of(!readOnly),

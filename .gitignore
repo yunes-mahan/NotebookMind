@@ -130,3 +130,10 @@ dmypy.json
 
 # Claude Code local settings (may contain secrets)
 .claude/settings.local.json
+
+# Old migration runner that may contain hardcoded DB credentials
+run-migration2.js
+
+# Unrelated bundled project / archives
+file-to-web-app-generator-main/
+*.zip

@@ -1,4 +1,4 @@
-import { getLeaderboard } from './supabase';
+import { getLeaderboard } from './supabaseDB';
 
 const CURRENT_USER = 'Demo Student';
 
@@ -40,8 +40,8 @@ export function renderLeaderboard(container: HTMLElement): void {
   const table = document.createElement('div');
   table.style.cssText = 'display:flex;flex-direction:column;gap:4px';
 
-  getLeaderboard().forEach((entry, i) => {
-    const isCurrent = entry.name === CURRENT_USER;
+  getLeaderboard().then(entries => entries).catch(() => []).then(entries => entries.forEach((entry: any, i: number) => {
+    const isCurrent = (entry.display_name || entry.name) === CURRENT_USER;
     const row = document.createElement('div');
     row.style.cssText = [
       'display:grid;grid-template-columns:44px 1fr 58px 36px',
@@ -58,7 +58,7 @@ export function renderLeaderboard(container: HTMLElement): void {
 
     const nameCell = document.createElement('div');
     nameCell.style.cssText = `font-size:13px;color:#1F2937;font-weight:${isCurrent ? '700' : '400'}`;
-    nameCell.textContent = entry.name;
+    nameCell.textContent = entry.display_name || entry.name || '?';
 
     const ptsCell = document.createElement('div');
     ptsCell.style.cssText = 'font-size:13px;font-weight:600;color:#7C3AED';
@@ -66,7 +66,7 @@ export function renderLeaderboard(container: HTMLElement): void {
 
     const badgeCell = document.createElement('div');
     badgeCell.style.cssText = 'font-size:16px;text-align:center';
-    badgeCell.textContent = entry.badge;
+    badgeCell.textContent = entry.badge ?? '';
 
     row.appendChild(rankCell);
     row.appendChild(nameCell);
@@ -76,7 +76,7 @@ export function renderLeaderboard(container: HTMLElement): void {
 
     // Staggered fade-in
     setTimeout(() => { row.style.opacity = '1'; }, i * 70);
-  });
+  }));
 
   container.appendChild(header);
   container.appendChild(banner);

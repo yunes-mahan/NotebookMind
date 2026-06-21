@@ -8,9 +8,13 @@ import {
   ICourseNotebook,
   ICourseWeek
 } from './courseData';
-import { openSlides } from './slidesModal';
-import { deckForPdf } from './slidesData';
+import { deckForPdf, IDeck, ISlide } from './slidesData';
+import { IPageData } from './pdfExtract';
+import { isConnected } from './supabase';
+import { getSupaWeekSlides } from './supabaseDB';
 import { button, infoBox, maxWidth } from './uiKit';
+
+const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
 export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   const root = maxWidth(host);
@@ -196,14 +200,32 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
         ? ' <span style="background:var(--nm-accent-light);color:var(--nm-accent-hover);padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;margin-left:6px">current</span>'
         : '');
 
-    // Slides toggle
+    // Slides button — opens full reader with all papermind features
     const slidesBtn = button(`📄 ${w.slides.label}`, 'ghost');
     slidesBtn.style.padding = '6px 12px';
     slidesBtn.style.fontSize = '12.5px';
-    slidesBtn.addEventListener('click', () => {
-      const deck = deckForPdf(w.slides.pdf);
-      if (deck) {
-        openSlides(deck, 0);
+    slidesBtn.addEventListener('click', async () => {
+      const origText = slidesBtn.textContent ?? '';
+      slidesBtn.textContent = '…';
+      slidesBtn.style.pointerEvents = 'none';
+
+      try {
+        // Try Supabase first (teacher-uploaded real PDF)
+        if (isConnected()) {
+          const remote = await getSupaWeekSlides(DEMO_COURSE_ID, w.week).catch(() => null);
+          if (remote) {
+            app.openSlideReader(remote.pages, remote.title, remote.docId);
+            return;
+          }
+        }
+        // Fall back to hardcoded slide deck
+        const deck = deckForPdf(w.slides.pdf);
+        if (deck) {
+          app.openSlideReader(deckToPages(deck), deck.title);
+        }
+      } finally {
+        slidesBtn.textContent = origText;
+        slidesBtn.style.pointerEvents = '';
       }
     });
 
@@ -293,6 +315,32 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
     row.appendChild(right);
     return row;
   }
+}
+
+function deckToPages(deck: IDeck): IPageData[] {
+  return deck.slides.map((slide, i) => ({
+    pageNumber: i + 1,
+    text: slideToText(slide),
+    imageBase64: null,
+    width: 1024,
+    height: 576
+  }));
+}
+
+function slideToText(slide: ISlide): string {
+  const lines: string[] = [];
+  if (slide.eyebrow) lines.push(slide.eyebrow.toUpperCase());
+  if (slide.title) {
+    lines.push('──────────────────────────────────');
+    lines.push(slide.title);
+  }
+  if (slide.presenter) lines.push('\n' + slide.presenter);
+  if (slide.text) lines.push('\n' + slide.text);
+  if (slide.bullets?.length) {
+    lines.push('');
+    slide.bullets.forEach(b => lines.push('  •  ' + b));
+  }
+  return lines.join('\n');
 }
 
 function openTeacherLogin(app: NotebookMindApp): void {

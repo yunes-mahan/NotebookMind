@@ -1,4 +1,4 @@
-import { savePoints } from './supabase';
+import { addPoints as dbAddPoints } from './supabaseDB';
 
 export const EXPLAIN_CELL = 1;
 export const QUIZ_CORRECT = 2;
@@ -15,7 +15,7 @@ export class PointsEngine {
 
   addPoints(amount: number, reason: string): void {
     this._total += amount;
-    savePoints('mock-user-1', this._total);
+    dbAddPoints(amount, reason).catch(() => null);
     document.dispatchEvent(
       new CustomEvent('notebookmind:points', {
         detail: { total: this._total, delta: amount, reason }
