@@ -8,7 +8,7 @@ import {
 import { button, infoBox, spinner, avatar } from './uiKit';
 import { makeCodeField } from './codeField';
 import { renderMarkdown } from './markdown';
-import { openSlides } from './slidesModal';
+import { openSlides, renderSlide } from './slidesModal';
 import { deckForPdf } from './slidesData';
 import {
   demoAssignment,
@@ -306,8 +306,103 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       }
     }
 
+    // Slides embedded directly in the cell's context (not a separate panel).
+    host.appendChild(buildSlideEmbed(i));
+
     host.appendChild(sectionLabel('Ask about this cell'));
     host.appendChild(buildChat(i));
+  }
+
+  // ── Inline lecture slide embedded in the cell context ─────────
+  function buildSlideEmbed(i: number): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.style.marginBottom = '16px';
+
+    const slides = demoCellSlides(docKey, i);
+    const deck = slides ? deckForPdf(slides.pdf) : undefined;
+
+    const lbl = sectionLabel('📄 Slide for this cell');
+    wrap.appendChild(lbl);
+
+    if (slides && deck) {
+      const idx = Math.max(0, Math.min(slides.page - 1, deck.slides.length - 1));
+
+      // Render the single relevant slide inline. The slide uses viewport-based
+      // font sizes, so we render it at 3× width inside a scaled holder to get a
+      // crisp miniature that fits the panel without clipping.
+      const frame = document.createElement('div');
+      frame.style.cssText = [
+        'border:1px solid var(--nm-border);border-radius:var(--nm-radius)',
+        'overflow:hidden;margin-bottom:8px;aspect-ratio:16/9;position:relative'
+      ].join(';');
+      const holder = document.createElement('div');
+      holder.style.cssText =
+        'position:absolute;top:0;left:0;width:300%;transform:scale(0.3333);transform-origin:top left';
+      holder.appendChild(renderSlide(deck.slides[idx], idx + 1, deck.slides.length));
+      frame.appendChild(holder);
+      wrap.appendChild(frame);
+
+      const cap = document.createElement('div');
+      cap.style.cssText =
+        'font-size:12px;color:var(--nm-text-muted);margin-bottom:8px';
+      cap.textContent = `${slides.label} · slide ${idx + 1} of ${deck.slides.length}`;
+      wrap.appendChild(cap);
+
+      const open = button('View full deck →', 'ghost');
+      open.style.cssText += ';width:100%';
+      open.addEventListener('click', () => openSlides(deck, idx));
+      wrap.appendChild(open);
+    } else {
+      const empty = document.createElement('div');
+      empty.style.cssText = [
+        'font-size:13px;color:var(--nm-text-muted);background:var(--nm-bg-subtle)',
+        'border:1px dashed var(--nm-border);border-radius:var(--nm-radius);padding:12px;line-height:1.5'
+      ].join(';');
+      empty.textContent = 'No lecture slide is linked to this cell yet.';
+      wrap.appendChild(empty);
+    }
+
+    // Student signals: request slides / flag unclear explanation.
+    wrap.appendChild(buildMaterialRequest(i, !!(slides && deck)));
+    return wrap;
+  }
+
+  function buildMaterialRequest(i: number, hasSlides: boolean): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap';
+
+    const confirm = document.createElement('div');
+    confirm.style.cssText =
+      'font-size:12px;color:var(--nm-accent-hover);margin-top:8px;display:none';
+
+    const signal = (type: 'request_slides' | 'missing_info', msg: string) => {
+      document.dispatchEvent(
+        new CustomEvent('notebookmind:material-request', {
+          detail: { docKey, cellIndex: i, type }
+        })
+      );
+      confirm.textContent = msg;
+      confirm.style.display = 'block';
+    };
+
+    if (!hasSlides) {
+      const reqBtn = button('🙋 Request slides', 'secondary');
+      reqBtn.addEventListener('click', () =>
+        signal('request_slides', '✓ Slide request sent to your teacher.')
+      );
+      row.appendChild(reqBtn);
+    }
+
+    const missBtn = button('⚠️ Mark missing info', 'ghost');
+    missBtn.addEventListener('click', () =>
+      signal('missing_info', '✓ Thanks — flagged this explanation as unclear.')
+    );
+    row.appendChild(missBtn);
+
+    const container = document.createElement('div');
+    container.appendChild(row);
+    container.appendChild(confirm);
+    return container;
   }
 
   function renderTeacherTab(host: HTMLElement, i: number): void {
@@ -329,19 +424,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       );
     }
 
-    // Teacher-linked lecture slides — open in a scrollable popup at the right slide.
-    const slides = demoCellSlides(docKey, i);
-    const deck = slides ? deckForPdf(slides.pdf) : undefined;
-    if (slides && deck) {
-      const matLabel = sectionLabel('📄 Lecture material');
-      matLabel.style.marginTop = '14px';
-      host.appendChild(matLabel);
-
-      const open = button(`📄 ${slides.label}`, 'secondary');
-      open.style.width = '100%';
-      open.addEventListener('click', () => openSlides(deck, slides.page - 1));
-      host.appendChild(open);
-    }
+    // Lecture slides are now embedded inline in the cell's AI context tab.
   }
 
   function renderStudentTab(host: HTMLElement, i: number): void {

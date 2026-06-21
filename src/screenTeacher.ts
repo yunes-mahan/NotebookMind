@@ -16,6 +16,11 @@ import {
 } from './demoData';
 import { Difficulty } from './challenge';
 import { button, infoBox, spinner, avatar, maxWidth } from './uiKit';
+import { extractPdfFull } from './pdfExtract';
+import { upsertCourseWeekSlides } from './supabaseDB';
+import { isConnected } from './supabase';
+
+const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
 type Tab = 'overview' | 'content' | 'tasks' | 'submissions';
 
@@ -481,6 +486,80 @@ function weekAdmin(w: ICourseWeek): HTMLElement {
     row.appendChild(sel);
     c.appendChild(row);
   });
+
+  // ── Upload slides to Supabase ──────────────────────────────
+  const slideSection = document.createElement('div');
+  slideSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid var(--nm-border-subtle)';
+  const slideLabel = document.createElement('div');
+  slideLabel.style.cssText = 'font-size:12px;font-weight:700;color:var(--nm-fg-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;font-family:var(--nm-font-mono)';
+  slideLabel.textContent = '📄 Upload slides (PDF → Supabase)';
+  slideSection.appendChild(slideLabel);
+
+  const slideStatus = document.createElement('div');
+  slideStatus.style.cssText = 'font-size:12px;color:var(--nm-fg-subtle);min-height:16px;margin-top:6px';
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.pdf';
+  fileInput.style.display = 'none';
+
+  const uploadBtn = button('Choose PDF…', 'secondary');
+  uploadBtn.style.fontSize = '12px';
+  uploadBtn.style.padding = '6px 12px';
+
+  uploadBtn.addEventListener('click', () => {
+    if (!isConnected()) {
+      slideStatus.textContent = '⚠️ Log in first to upload slides to Supabase.';
+      slideStatus.style.color = 'var(--nm-danger)';
+      return;
+    }
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    uploadBtn.style.pointerEvents = 'none';
+    slideStatus.textContent = '⏳ Extracting PDF…';
+    slideStatus.style.color = 'var(--nm-fg-muted)';
+    try {
+      const result = await extractPdfFull(file);
+      slideStatus.textContent = `⏳ Uploading ${result.pages.length} pages to Supabase…`;
+      await upsertCourseWeekSlides({
+        courseId: DEMO_COURSE_ID,
+        weekNumber: w.week,
+        weekTheme: w.theme,
+        topics: w.topics,
+        title: `Week ${w.week} — ${file.name.replace(/\.pdf$/i, '')}`,
+        sourceText: result.fullText,
+        parts: result.pages.map((p, i) => ({
+          index: i,
+          title: `Page ${p.pageNumber}`,
+          text: p.text,
+          imageBase64: p.imageBase64,
+          width: p.width,
+          height: p.height
+        }))
+      });
+      slideStatus.textContent = `✓ Uploaded — students will see this in the course home.`;
+      slideStatus.style.color = 'var(--nm-success-text)';
+      w.slides.label = `Week ${w.week} slides (online)`;
+    } catch (err) {
+      slideStatus.textContent = `Error: ${(err as Error).message}`;
+      slideStatus.style.color = 'var(--nm-danger)';
+    } finally {
+      uploadBtn.style.pointerEvents = '';
+      fileInput.value = '';
+    }
+  });
+
+  slideSection.appendChild(uploadBtn);
+  slideSection.appendChild(fileInput);
+  slideSection.appendChild(slideStatus);
+  c.appendChild(slideSection);
+
   return c;
 }
 
