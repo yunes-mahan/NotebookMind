@@ -25,10 +25,10 @@ export async function renderDependencyGraph(
     const svgEl = container.querySelector('svg');
     if (svgEl) {
       svgEl.style.cssText =
-        'max-width:100%;height:auto;border-radius:10px;border:1px solid #E5E7EB';
+        'max-width:100%;height:auto;border-radius:10px;border:1px solid var(--nm-border)';
     }
   } catch {
     container.innerHTML =
-      '<div style="color:#EF4444;font-size:13px;padding:12px;background:#FEE2E2;border-radius:8px">Failed to render dependency graph. The diagram syntax may be invalid.</div>';
+      '<div style="color:var(--nm-danger);font-size:13px;padding:12px;background:var(--nm-danger-soft);border-radius:8px">Failed to render dependency graph. The diagram syntax may be invalid.</div>';
   }
 }

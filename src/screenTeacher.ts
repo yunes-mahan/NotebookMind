@@ -1,5 +1,6 @@
 import { NotebookMindApp } from './nbApp';
-import { COURSE, STATUS_META, NbStatus, ICourseWeek } from './courseData';
+import { ICourseWeek } from './courseData';
+import { activeCourse, activeData } from './courseStore';
 import {
   TEACHER_STUDENTS,
   CELL_PERF,
@@ -15,123 +16,82 @@ import {
   IAuthoredChallenge
 } from './demoData';
 import { Difficulty } from './challenge';
-import { button, infoBox, spinner, avatar, maxWidth } from './uiKit';
+import {
+  button,
+  infoBox,
+  spinner,
+  maxWidth,
+  backLink,
+  segmented,
+  tag,
+  statusIcon
+} from './uiKit';
 import { extractPdfFull } from './pdfExtract';
 import { upsertCourseWeekSlides } from './supabaseDB';
 import { isConnected } from './supabase';
 
 const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
-type Tab = 'overview' | 'content' | 'tasks' | 'submissions';
+type Tab = 'overview' | 'content' | 'tasks';
 
 function basename(p: string): string {
   return p.split('/').pop() ?? p;
 }
 
 export function renderTeacher(host: HTMLElement, app: NotebookMindApp): void {
-  const root = maxWidth(host);
+  const root = maxWidth(host, 1100);
+  root.style.cssText +=
+    ';display:flex;flex-direction:column;gap:18px;padding-bottom:64px';
   let tab: Tab = 'overview';
 
-  // ── Header ────────────────────────────────────────────────────
+  // Header: back link · title + "Aggregates only" badge · segmented tabs
   const head = document.createElement('div');
-  head.style.cssText =
-    'display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:6px';
-  const left = document.createElement('div');
-  const title = document.createElement('div');
-  title.style.cssText =
-    'font-size:24px;font-weight:700;letter-spacing:-0.02em;color:var(--nm-fg-strong)';
-  title.textContent = '👩‍🏫 Teacher dashboard';
-  const subj = document.createElement('div');
-  subj.style.cssText = 'font-size:13px;color:var(--nm-fg-muted);margin-top:4px';
-  subj.textContent = `${COURSE.subject} · ${COURSE.teacher}`;
-  left.appendChild(title);
-  left.appendChild(subj);
-  const exit = button('Exit', 'ghost');
-  exit.addEventListener('click', () => app.navigate('home'));
-  head.appendChild(left);
-  head.appendChild(exit);
-  root.appendChild(head);
+  head.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+  head.appendChild(backLink('Back to Course', () => app.navigate('home')));
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex;align-items:center;gap:12px';
+  const h1 = document.createElement('h1');
+  h1.style.cssText =
+    'margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;color:var(--text-primary)';
+  h1.textContent = 'Teacher dashboard';
+  titleRow.appendChild(h1);
+  titleRow.appendChild(tag('Aggregates only', 'success'));
+  head.appendChild(titleRow);
+  const courseLine = document.createElement('span');
+  courseLine.style.cssText = 'font-size:13px;color:var(--text-tertiary)';
+  const ucHead = activeCourse();
+  courseLine.textContent = ucHead.isOwn
+    ? `${ucHead.data.subject} · you teach this course · invite code ${ucHead.code}`
+    : `${ucHead.data.subject} · ${ucHead.data.teacher}`;
+  head.appendChild(courseLine);
 
-  // ── Tabs ──────────────────────────────────────────────────────
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'content', label: 'Weeks & content' },
-    { id: 'tasks', label: 'Tasks' },
-    { id: 'submissions', label: 'Submissions' }
+    { id: 'tasks', label: 'Tasks' }
   ];
-  const tabBar = document.createElement('div');
-  tabBar.style.cssText =
-    'display:flex;gap:4px;border-bottom:1px solid var(--nm-border);margin:14px 0 20px;flex-wrap:wrap';
-  const body = document.createElement('div');
+  const seg = segmented(tabs, tab, id => {
+    tab = id as Tab;
+    render();
+  });
+  seg.style.alignSelf = 'flex-start';
+  head.appendChild(seg);
+  root.appendChild(head);
 
-  function paintTabs(): void {
-    tabBar.innerHTML = '';
-    tabs.forEach(t => {
-      const b = document.createElement('button');
-      b.textContent = t.label;
-      const on = tab === t.id;
-      b.style.cssText = [
-        'padding:9px 13px;border:none;background:transparent;cursor:pointer',
-        'font-size:13px;font-weight:600;font-family:var(--nm-font-sans)',
-        `color:${on ? 'var(--nm-fg-strong)' : 'var(--nm-fg-muted)'}`,
-        `border-bottom:2px solid ${on ? 'var(--nm-fg-strong)' : 'transparent'};margin-bottom:-1px`
-      ].join(';');
-      b.addEventListener('click', () => {
-        tab = t.id;
-        render();
-      });
-      tabBar.appendChild(b);
-    });
-  }
+  const body = document.createElement('div');
+  root.appendChild(body);
 
   function render(): void {
-    paintTabs();
     body.innerHTML = '';
     if (tab === 'overview') {
       renderOverview(body);
     } else if (tab === 'content') {
       renderContent(body);
-    } else if (tab === 'tasks') {
-      renderTasks(body, app);
     } else {
-      renderSubmissions(body);
+      renderTasks(body, app);
     }
   }
-
-  root.appendChild(tabBar);
-  root.appendChild(body);
   render();
-}
-
-// ── Shared bits ───────────────────────────────────────────────────
-function statCard(value: string, label: string): HTMLElement {
-  const c = document.createElement('div');
-  c.style.cssText =
-    'background:var(--nm-bg-elev-1);border:1px solid var(--nm-border);border-radius:var(--nm-radius-lg);padding:16px 18px;box-shadow:var(--nm-shadow-xs)';
-  const v = document.createElement('div');
-  v.style.cssText = 'font-size:28px;font-weight:800;color:var(--nm-fg-strong);line-height:1';
-  v.textContent = value;
-  const l = document.createElement('div');
-  l.style.cssText = 'font-size:12.5px;color:var(--nm-fg-muted);margin-top:6px;font-weight:600';
-  l.textContent = label;
-  c.appendChild(v);
-  c.appendChild(l);
-  return c;
-}
-
-function card(): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText =
-    'background:var(--nm-bg-elev-1);border:1px solid var(--nm-border);border-radius:var(--nm-radius-lg);padding:16px 18px;box-shadow:var(--nm-shadow-xs);margin-bottom:14px';
-  return el;
-}
-
-function sectionTitle(text: string): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText =
-    'font-size:13px;font-weight:700;color:var(--nm-fg-muted);text-transform:uppercase;letter-spacing:0.04em;font-family:var(--nm-font-mono);margin:6px 0 12px';
-  el.textContent = text;
-  return el;
 }
 
 function field(labelText: string, el: HTMLElement): HTMLElement {
@@ -166,33 +126,83 @@ function textArea(value = '', rows = 4): HTMLTextAreaElement {
 
 // ── Overview ──────────────────────────────────────────────────────
 function renderOverview(host: HTMLElement): void {
+  host.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  if (!activeCourse().isDemo) {
+    const empty = document.createElement('div');
+    empty.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 24px;background:var(--bg-panel);border:1px dashed var(--border-strong);border-radius:10px;text-align:center';
+    empty.innerHTML =
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>' +
+      '<span style="font-size:13px;font-weight:600;color:var(--text-primary)">No student activity yet</span>' +
+      '<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.55;max-width:400px">Aggregate analytics appear here once students join with your invite code and work through notebooks.</span>';
+    host.appendChild(empty);
+    return;
+  }
   const avgFirst = Math.round(
     TEACHER_STUDENTS.reduce((s, r) => s + r.firstTryPct, 0) / TEACHER_STUDENTS.length
   );
+
+  // KPI tiles (prototype: colored dot + caps label + 28px mono value + sub)
+  const kpiTile = (
+    value: string,
+    label: string,
+    sub: string,
+    color = 'var(--text-primary)'
+  ): HTMLElement => {
+    const d = document.createElement('div');
+    d.style.cssText =
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:15px 16px;display:flex;flex-direction:column;gap:9px';
+    d.innerHTML =
+      `<div style="display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:${color}"></span>` +
+      `<span style="font-size:10.5px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;line-height:1.3">${label}</span></div>` +
+      `<span style="font-size:28px;font-weight:600;font-family:var(--font-mono);letter-spacing:-0.02em;line-height:1;color:${color}">${value}</span>` +
+      `<span style="font-size:11.5px;color:var(--text-tertiary);line-height:1.35">${sub}</span>`;
+    return d;
+  };
   const stats = document.createElement('div');
   stats.style.cssText =
-    'display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px';
-  stats.appendChild(statCard(String(TEACHER_STUDENTS.length), 'Active students'));
-  stats.appendChild(statCard(`${avgFirst}%`, 'Avg first-try'));
-  stats.appendChild(statCard(String(SUBMISSIONS.length), 'Recent submissions'));
+    'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
   stats.appendChild(
-    statCard(
+    kpiTile(String(TEACHER_STUDENTS.length), 'Active students', 'worked in a notebook this week')
+  );
+  stats.appendChild(kpiTile(`${avgFirst}%`, 'Avg first-try rate', 'across all challenges'));
+  stats.appendChild(
+    kpiTile(String(SUBMISSIONS.length), 'Submissions this week', 'notebook runs completed')
+  );
+  stats.appendChild(
+    kpiTile(
       String(CELL_PERF.filter(p => p.struggle >= 60).length),
-      'High-struggle cells'
+      'High-struggle cells',
+      'need your attention',
+      'var(--yellow-500)'
     )
   );
   host.appendChild(stats);
 
-  // Where students struggle — short, wide vertical bars with hover details.
-  const struggleCard = card();
-  struggleCard.appendChild(sectionTitle('Where students struggle'));
-  struggleCard.appendChild(struggleChart());
-  host.appendChild(struggleCard);
+  // Struggle (left, wide) + Topic mastery (right)
+  const grid = document.createElement('div');
+  grid.style.cssText =
+    'display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px;align-items:start';
+  grid.appendChild(struggleCard());
+  grid.appendChild(topicMastery());
+  host.appendChild(grid);
 
-  // AI insights — shown immediately (upgraded by AI if available) + a chat.
-  const aiCard = card();
-  aiCard.appendChild(sectionTitle('AI insights'));
+  // AI insights — text + "Ask for improvements" input.
+  const aiCard = document.createElement('div');
+  aiCard.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px';
+  const aiHead = document.createElement('div');
+  aiHead.style.cssText = 'display:flex;align-items:center;gap:8px';
+  const aiTitle = document.createElement('span');
+  aiTitle.style.cssText =
+    'font-size:13.5px;font-weight:600;color:var(--text-primary)';
+  aiTitle.textContent = 'AI insights';
+  aiHead.appendChild(aiTitle);
+  aiHead.appendChild(tag('Generated', 'accent'));
+  aiCard.appendChild(aiHead);
   const insHost = document.createElement('div');
+  insHost.style.cssText =
+    'font-size:13px;line-height:1.65;color:var(--text-secondary)';
   insHost.appendChild(renderMarkdown(DUMMY_INSIGHTS));
   aiCard.appendChild(insHost);
   void teacherInsights(insightsContext())
@@ -201,115 +211,100 @@ function renderOverview(host: HTMLElement): void {
       insHost.appendChild(renderMarkdown(text));
     })
     .catch(() => undefined);
-  const chatTitle = document.createElement('div');
-  chatTitle.style.cssText =
-    'font-size:12px;font-weight:700;color:var(--nm-fg-muted);text-transform:uppercase;letter-spacing:0.04em;font-family:var(--nm-font-mono);margin:16px 0 8px';
-  chatTitle.textContent = 'Ask for improvements';
-  aiCard.appendChild(chatTitle);
   aiCard.appendChild(teacherChat());
   host.appendChild(aiCard);
-
-  // Students
-  const studentsCard = card();
-  studentsCard.appendChild(sectionTitle('Students'));
-  TEACHER_STUDENTS.forEach(s => {
-    const row = document.createElement('div');
-    row.style.cssText =
-      'display:grid;grid-template-columns:32px 1fr 70px 90px 90px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--nm-border-subtle)';
-    row.appendChild(avatar(s.name, 28));
-    const name = document.createElement('div');
-    name.style.cssText = 'font-size:13px;font-weight:600;color:var(--nm-fg)';
-    name.textContent = s.name;
-    row.appendChild(name);
-    row.appendChild(miniMetric(`${s.xp}`, 'XP'));
-    row.appendChild(miniMetric(`${s.firstTryPct}%`, '1st try'));
-    const la = document.createElement('div');
-    la.style.cssText = 'font-size:12px;color:var(--nm-fg-subtle);text-align:right';
-    la.textContent = s.lastActive;
-    row.appendChild(la);
-    studentsCard.appendChild(row);
-  });
-  host.appendChild(studentsCard);
 }
 
-function miniMetric(value: string, label: string): HTMLElement {
-  const d = document.createElement('div');
-  d.style.cssText = 'text-align:right';
-  d.innerHTML = `<div style="font-size:13px;font-weight:700;color:var(--nm-fg)">${value}</div><div style="font-size:10px;color:var(--nm-fg-subtle)">${label}</div>`;
-  return d;
+/** Where students struggle — horizontal indigo bars (prototype). */
+function struggleCard(): HTMLElement {
+  const c = document.createElement('div');
+  c.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:baseline;gap:8px';
+  head.innerHTML =
+    '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Where students struggle</span>' +
+    '<span style="flex:1"></span>' +
+    '<span style="font-size:11px;color:var(--text-quaternary)">All students · aggregate</span>';
+  c.appendChild(head);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  const maxStruggle = Math.max(...CELL_PERF.map(p => p.struggle));
+  [...CELL_PERF]
+    .sort((a, b) => b.struggle - a.struggle)
+    .forEach(p => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-direction:column;gap:5px';
+      row.title = `${p.cell} · Week ${p.week}\n${p.firstTryPct}% first-try · ${p.avgAttempts} avg tries\n${p.issue}`;
+      const lblRow = document.createElement('div');
+      lblRow.style.cssText = 'display:flex;align-items:baseline;gap:10px';
+      lblRow.innerHTML =
+        `<span style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.cell} · W${p.week}</span>` +
+        `<span style="flex:0 0 auto;font-size:11.5px;font-family:var(--font-mono);color:var(--text-tertiary)">${p.struggle}</span>`;
+      const track = document.createElement('div');
+      track.style.cssText =
+        'height:8px;border-radius:4px;background:var(--gray-800);overflow:hidden';
+      const fill = document.createElement('div');
+      const alpha = p.struggle >= 55 ? 1 : p.struggle >= 35 ? 0.72 : 0.45;
+      fill.style.cssText = `height:100%;border-radius:4px;background:rgba(94,106,210,${alpha});width:${Math.round((p.struggle / maxStruggle) * 100)}%`;
+      track.appendChild(fill);
+      row.appendChild(lblRow);
+      row.appendChild(track);
+      list.appendChild(row);
+    });
+  c.appendChild(list);
+
+  const hint = document.createElement('span');
+  hint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+  hint.textContent =
+    'Struggle score = wrong first attempts + hint requests + reveals, per cell.';
+  c.appendChild(hint);
+  return c;
+}
+
+/** Topic mastery — "Going well" (green) vs "Needs review" (yellow) bars. */
+function topicMastery(): HTMLElement {
+  const c = document.createElement('div');
+  c.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:16px';
+  c.innerHTML =
+    '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Topic mastery</span>';
+
+  const sorted = [...CELL_PERF].sort((a, b) => b.firstTryPct - a.firstTryPct);
+  const strengths = sorted.slice(0, 3);
+  const weaknesses = sorted.slice(-3).reverse();
+
+  const makeList = (
+    title: string,
+    items: typeof strengths,
+    color: string
+  ): HTMLElement => {
+    const col = document.createElement('div');
+    col.style.cssText = 'display:flex;flex-direction:column;gap:11px';
+    col.innerHTML = `<span style="font-size:11px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.05em">${title}</span>`;
+    items.forEach(p => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-direction:column;gap:5px';
+      row.innerHTML =
+        `<div style="display:flex;align-items:baseline;gap:10px"><span style="flex:1;min-width:0;font-size:12.5px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.cell}</span>` +
+        `<span style="flex:0 0 auto;font-size:11.5px;font-family:var(--font-mono);color:${color}">${p.firstTryPct}%</span></div>` +
+        `<div style="height:6px;border-radius:3px;background:var(--gray-800);overflow:hidden"><div style="height:100%;border-radius:3px;background:${color === 'var(--green-400)' ? 'var(--green-500)' : 'var(--yellow-500)'};width:${Math.min(100, p.firstTryPct)}%"></div></div>`;
+      col.appendChild(row);
+    });
+    return col;
+  };
+
+  c.appendChild(makeList('Going well', strengths, 'var(--green-400)'));
+  const sep = document.createElement('div');
+  sep.style.cssText = 'height:1px;background:var(--border-subtle)';
+  c.appendChild(sep);
+  c.appendChild(makeList('Needs review', weaknesses, 'var(--yellow-500)'));
+  return c;
 }
 
 const DUMMY_INSIGHTS =
   '## Where students struggle\n\n- **Compare study groups** has the lowest first-try rate (38%). The named-aggregation syntax and *mean vs sum* trip students up — add a worked example to the Week 2 slides.\n- **Compute the exam score** (55%) — the sign of the sleep term causes errors. A short note on reading a formula before running would help.\n- **Correlation analysis** (47%) — `idxmax` vs `idxmin` is a recurring confusion.\n\n**Suggested action:** unlock a short review notebook on group-by and correlation before Week 4, and clarify the teacher note on aggregation.';
-
-function lerpHex(a: string, b: string, t: number): string {
-  const x = Math.max(0, Math.min(1, t));
-  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
-  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
-  const c = pa.map((v, k) => Math.round(v + (pb[k] - v) * x));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
-
-function struggleChart(): HTMLElement {
-  const maxH = 80; // short bars
-  const wrap = document.createElement('div');
-  const chart = document.createElement('div');
-  chart.style.cssText = 'display:flex;align-items:flex-end;gap:12px;overflow-x:auto;padding:4px 2px 0';
-
-  [...CELL_PERF]
-    .sort((a, b) => a.week - b.week)
-    .forEach(p => {
-      // Continuous green → orange scale by struggle (app colours).
-      const color = lerpHex('#1F8A5B', '#FE7030', p.struggle / 100);
-      const col = document.createElement('div');
-      col.style.cssText =
-        'flex:1;min-width:62px;display:flex;flex-direction:column;align-items:center;cursor:default';
-      col.title = `${p.cell} · Week ${p.week}\nStruggle ${p.struggle}/100\n${p.firstTryPct}% first-try · ${p.avgAttempts} avg tries\n⚠ ${p.issue}`;
-
-      const val = document.createElement('div');
-      val.style.cssText =
-        'font-size:11px;font-weight:700;font-family:var(--nm-font-mono);color:var(--nm-fg-muted);margin-bottom:4px';
-      val.textContent = String(p.struggle);
-
-      const barWrap = document.createElement('div');
-      barWrap.style.cssText = `height:${maxH}px;width:100%;display:flex;align-items:flex-end;justify-content:center`;
-      const bar = document.createElement('div');
-      const hgt = Math.max(6, Math.round((p.struggle / 100) * maxH));
-      bar.style.cssText = `width:42px;max-width:70%;height:${hgt}px;background:${color};border-radius:6px 6px 0 0;transition:filter 160ms var(--nm-ease)`;
-      barWrap.appendChild(bar);
-
-      const lbl = document.createElement('div');
-      lbl.style.cssText =
-        'font-size:11px;color:var(--nm-fg-muted);margin-top:7px;text-align:center;line-height:1.25;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      lbl.textContent = p.cell;
-      const wk = document.createElement('div');
-      wk.style.cssText =
-        'font-size:10px;font-family:var(--nm-font-mono);color:var(--nm-fg-subtle)';
-      wk.textContent = `W${p.week}`;
-
-      col.addEventListener('mouseenter', () => {
-        bar.style.filter = 'brightness(0.88)';
-      });
-      col.addEventListener('mouseleave', () => {
-        bar.style.filter = 'none';
-      });
-
-      col.appendChild(val);
-      col.appendChild(barWrap);
-      col.appendChild(lbl);
-      col.appendChild(wk);
-      chart.appendChild(col);
-    });
-
-  const hint = document.createElement('div');
-  hint.style.cssText =
-    'font-size:11.5px;color:var(--nm-fg-subtle);margin-top:10px';
-  hint.textContent =
-    'Bar height & colour = struggle score (green = fine → orange = struggling). Hover for details.';
-  wrap.appendChild(chart);
-  wrap.appendChild(hint);
-  return wrap;
-}
 
 function teacherChat(): HTMLElement {
   const wrap = document.createElement('div');
@@ -389,44 +384,67 @@ function teacherChat(): HTMLElement {
   return wrap;
 }
 
-// ── Weeks & content ───────────────────────────────────────────────
-function renderContent(host: HTMLElement): void {
-  const intro = infoBox(
-    'Set the current week, lock or unlock notebooks, and add weeks. The student start screen updates from here.',
-    'info'
-  );
-  intro.style.marginBottom = '16px';
-  host.appendChild(intro);
+// ── Weeks & content (prototype layout) ────────────────────────────
+// Session stores: expanded rows · timed releases · uploaded material names.
+const tExpand = new Map<string, boolean>();
+const tSchedules = new Map<string, string>();
+const tFiles = new Map<number, string[]>();
 
-  const top = card();
-  const curWrap = document.createElement('div');
-  curWrap.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
-  const lbl = document.createElement('div');
-  lbl.style.cssText = 'font-size:13px;font-weight:600;color:var(--nm-fg)';
-  lbl.textContent = 'Current week';
-  const sel = document.createElement('select');
-  sel.style.cssText =
-    'font-family:var(--nm-font-sans);font-size:13px;padding:7px 10px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);background:#fff;color:var(--nm-fg)';
-  COURSE.weeks.forEach(w => {
-    const o = document.createElement('option');
-    o.value = String(w.week);
-    o.textContent = `Week ${w.week} — ${w.theme}`;
-    if (w.week === COURSE.currentWeek) {
-      o.selected = true;
+function renderContent(host: HTMLElement): void {
+  const COURSE = activeData();
+  host.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+
+  // Timed releases that have passed → unlock automatically.
+  tSchedules.forEach((when, nbId) => {
+    if (when && new Date(when) <= new Date()) {
+      const nb = COURSE.notebooks[nbId];
+      if (nb && nb.status === 'locked') nb.status = 'available';
+      tSchedules.delete(nbId);
     }
-    sel.appendChild(o);
   });
-  sel.addEventListener('change', () => {
-    COURSE.currentWeek = parseInt(sel.value, 10);
+
+  const repaint = (): void => {
+    host.innerHTML = '';
+    renderContent(host);
+  };
+
+  // Current-week picker chips
+  const top = document.createElement('div');
+  top.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap';
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'font-size:13px;font-weight:500;color:var(--text-secondary)';
+  lbl.textContent = 'Current week';
+  top.appendChild(lbl);
+  const picks = document.createElement('div');
+  picks.style.cssText = 'display:flex;gap:4px';
+  COURSE.weeks.forEach(w => {
+    const p = document.createElement('span');
+    p.textContent = String(w.week);
+    const on = COURSE.currentWeek === w.week;
+    p.style.cssText =
+      'width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--font-mono);' +
+      (on
+        ? 'background:var(--accent);color:#fff'
+        : 'background:var(--bg-panel);color:var(--text-tertiary);border:1px solid var(--border-subtle)');
+    p.addEventListener('click', () => {
+      COURSE.currentWeek = w.week;
+      repaint();
+    });
+    picks.appendChild(p);
   });
-  curWrap.appendChild(lbl);
-  curWrap.appendChild(sel);
-  top.appendChild(curWrap);
+  top.appendChild(picks);
+  const theme = document.createElement('span');
+  theme.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
+  theme.textContent =
+    COURSE.weeks.find(w => w.week === COURSE.currentWeek)?.theme ?? '';
+  top.appendChild(theme);
   host.appendChild(top);
 
-  COURSE.weeks.forEach(w => host.appendChild(weekAdmin(w)));
+  COURSE.weeks.forEach(w => host.appendChild(weekAdmin(w, repaint)));
 
   const addBtn = button('+ Add week', 'secondary');
+  addBtn.style.alignSelf = 'flex-start';
   addBtn.addEventListener('click', () => {
     const n = COURSE.weeks.length + 1;
     const w: ICourseWeek = {
@@ -437,96 +455,106 @@ function renderContent(host: HTMLElement): void {
       notebookIds: []
     };
     COURSE.weeks.push(w);
-    host.insertBefore(weekAdmin(w), addBtn);
+    repaint();
   });
   host.appendChild(addBtn);
 }
 
-function weekAdmin(w: ICourseWeek): HTMLElement {
-  const c = card();
-  const t = document.createElement('div');
-  t.style.cssText = 'font-size:14px;font-weight:700;color:var(--nm-fg-strong);margin-bottom:10px';
-  t.textContent = `Week ${w.week} — ${w.theme}`;
-  c.appendChild(t);
+function weekAdmin(w: ICourseWeek, repaint: () => void): HTMLElement {
+  const COURSE = activeData();
+  const box = document.createElement('div');
+  box.style.cssText =
+    'background:var(--bg-panel);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
 
-  if (w.notebookIds.length === 0) {
-    const empty = document.createElement('div');
-    empty.style.cssText = 'font-size:12.5px;color:var(--nm-fg-subtle)';
-    empty.textContent = 'No notebooks yet.';
-    c.appendChild(empty);
+  // Header: title · Current badge · unlocked count · Materials · slides button
+  const head = document.createElement('div');
+  head.style.cssText =
+    'display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border-subtle);flex-wrap:wrap';
+  const t = document.createElement('span');
+  t.style.cssText =
+    'font-size:13px;font-weight:600;white-space:nowrap;color:var(--text-primary)';
+  t.textContent = `Week ${w.week} — ${w.theme}`;
+  head.appendChild(t);
+  if (w.week === COURSE.currentWeek) head.appendChild(tag('Current', 'accent', true));
+  const nbs = w.notebookIds.map(id => COURSE.notebooks[id]).filter(Boolean);
+  const unlocked = nbs.filter(n => n.status !== 'locked').length;
+  const count = document.createElement('span');
+  count.style.cssText =
+    'font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono);white-space:nowrap';
+  count.textContent = `${unlocked} of ${nbs.length} unlocked`;
+  head.appendChild(count);
+  const spacer = document.createElement('span');
+  spacer.style.cssText = 'flex:1;min-width:12px';
+  head.appendChild(spacer);
+
+  const actions = document.createElement('div');
+  actions.style.cssText =
+    'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+
+  const slidesUploaded = !!w.slides.pdf || w.slides.label.includes('online');
+  if (slidesUploaded) {
+    const ok = document.createElement('span');
+    ok.style.cssText =
+      'display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--green-400);white-space:nowrap';
+    ok.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>Slides uploaded';
+    actions.appendChild(ok);
   }
 
-  w.notebookIds.forEach(id => {
-    const nb = COURSE.notebooks[id];
-    if (!nb) {
-      return;
-    }
-    const row = document.createElement('div');
-    row.style.cssText =
-      'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--nm-border-subtle)';
-    const name = document.createElement('div');
-    name.style.cssText = 'font-size:13px;color:var(--nm-fg);font-weight:500';
-    name.textContent = nb.title;
-    const sel = document.createElement('select');
-    sel.style.cssText =
-      'font-family:var(--nm-font-sans);font-size:12px;padding:5px 8px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);background:#fff;color:var(--nm-fg)';
-    (['done', 'available', 'locked'] as NbStatus[]).forEach(st => {
-      const o = document.createElement('option');
-      o.value = st;
-      o.textContent = STATUS_META[st].label;
-      if (nb.status === st) {
-        o.selected = true;
-      }
-      sel.appendChild(o);
-    });
-    sel.addEventListener('change', () => {
-      nb.status = sel.value as NbStatus;
-    });
-    row.appendChild(name);
-    row.appendChild(sel);
-    c.appendChild(row);
+  // Materials: label-styled multi-upload → name chips
+  const matLabel = document.createElement('label');
+  matLabel.style.cssText =
+    'display:inline-flex;align-items:center;gap:6px;height:32px;box-sizing:border-box;font-size:12px;font-weight:500;color:var(--text-secondary);cursor:pointer;white-space:nowrap;border:1px solid var(--border-default);border-radius:6px;padding:0 12px;transition:border-color var(--dur-fast) var(--ease-out)';
+  matLabel.innerHTML =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Materials';
+  matLabel.addEventListener('mouseenter', () => {
+    matLabel.style.color = 'var(--text-primary)';
+    matLabel.style.borderColor = 'var(--border-strong)';
   });
+  matLabel.addEventListener('mouseleave', () => {
+    matLabel.style.color = 'var(--text-secondary)';
+    matLabel.style.borderColor = 'var(--border-default)';
+  });
+  const matInput = document.createElement('input');
+  matInput.type = 'file';
+  matInput.multiple = true;
+  matInput.style.display = 'none';
+  matInput.addEventListener('change', () => {
+    const names = Array.from(matInput.files ?? []).map(f => f.name);
+    if (!names.length) return;
+    tFiles.set(w.week, [...(tFiles.get(w.week) ?? []), ...names]);
+    matInput.value = '';
+    repaint();
+  });
+  matLabel.appendChild(matInput);
+  actions.appendChild(matLabel);
 
-  // ── Upload slides to Supabase ──────────────────────────────
-  const slideSection = document.createElement('div');
-  slideSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid var(--nm-border-subtle)';
-  const slideLabel = document.createElement('div');
-  slideLabel.style.cssText = 'font-size:12px;font-weight:700;color:var(--nm-fg-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;font-family:var(--nm-font-mono)';
-  slideLabel.textContent = '📄 Upload slides (PDF → Supabase)';
-  slideSection.appendChild(slideLabel);
-
-  const slideStatus = document.createElement('div');
-  slideStatus.style.cssText = 'font-size:12px;color:var(--nm-fg-subtle);min-height:16px;margin-top:6px';
-
+  // Slides upload (functional: PDF → Supabase when connected)
+  const slideStatus = document.createElement('span');
+  slideStatus.style.cssText =
+    'font-size:11.5px;color:var(--text-quaternary);white-space:nowrap';
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = '.pdf';
   fileInput.style.display = 'none';
-
-  const uploadBtn = button('Choose PDF…', 'secondary');
-  uploadBtn.style.fontSize = '12px';
-  uploadBtn.style.padding = '6px 12px';
-
+  const uploadBtn = button(slidesUploaded ? 'Replace slides' : 'Upload slides', 'secondary');
   uploadBtn.addEventListener('click', () => {
     if (!isConnected()) {
-      slideStatus.textContent = '⚠️ Log in first to upload slides to Supabase.';
-      slideStatus.style.color = 'var(--nm-danger)';
+      slideStatus.textContent = 'Connect Supabase to upload slides.';
+      slideStatus.style.color = 'var(--yellow-500)';
       return;
     }
     fileInput.click();
   });
-
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
-    if (!file) {
-      return;
-    }
+    if (!file) return;
     uploadBtn.style.pointerEvents = 'none';
-    slideStatus.textContent = '⏳ Extracting PDF…';
-    slideStatus.style.color = 'var(--nm-fg-muted)';
+    slideStatus.textContent = 'Extracting PDF…';
+    slideStatus.style.color = 'var(--text-quaternary)';
     try {
       const result = await extractPdfFull(file);
-      slideStatus.textContent = `⏳ Uploading ${result.pages.length} pages to Supabase…`;
+      slideStatus.textContent = `Uploading ${result.pages.length} pages…`;
       await upsertCourseWeekSlides({
         courseId: DEMO_COURSE_ID,
         weekNumber: w.week,
@@ -543,61 +571,214 @@ function weekAdmin(w: ICourseWeek): HTMLElement {
           height: p.height
         }))
       });
-      slideStatus.textContent = `✓ Uploaded — students will see this in the course home.`;
-      slideStatus.style.color = 'var(--nm-success-text)';
       w.slides.label = `Week ${w.week} slides (online)`;
+      repaint();
     } catch (err) {
       slideStatus.textContent = `Error: ${(err as Error).message}`;
-      slideStatus.style.color = 'var(--nm-danger)';
+      slideStatus.style.color = 'var(--red-400)';
     } finally {
       uploadBtn.style.pointerEvents = '';
       fileInput.value = '';
     }
   });
+  actions.appendChild(uploadBtn);
+  actions.appendChild(fileInput);
+  actions.appendChild(slideStatus);
+  head.appendChild(actions);
+  box.appendChild(head);
 
-  slideSection.appendChild(uploadBtn);
-  slideSection.appendChild(fileInput);
-  slideSection.appendChild(slideStatus);
-  c.appendChild(slideSection);
+  // Materials chips
+  const files = tFiles.get(w.week) ?? [];
+  if (files.length > 0) {
+    const chips = document.createElement('div');
+    chips.style.cssText =
+      'display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 4px';
+    files.forEach(fn => {
+      const chip = document.createElement('span');
+      chip.style.cssText =
+        'display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-secondary);background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:999px;padding:3px 10px';
+      chip.innerHTML =
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
+        fn;
+      chips.appendChild(chip);
+    });
+    box.appendChild(chips);
+  }
 
-  return c;
+  if (nbs.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText =
+      'padding:12px 16px;font-size:12px;color:var(--text-quaternary)';
+    empty.textContent = 'No notebooks yet — add them in the Tasks tab.';
+    box.appendChild(empty);
+  }
+
+  nbs.forEach(nb => box.appendChild(nbAdminRow(nb, repaint)));
+  return box;
+}
+
+/** One notebook row: status · title · sched pill · state · Lock/Unlock · expand. */
+function nbAdminRow(
+  nb: ReturnType<typeof activeData>['notebooks'][string],
+  repaint: () => void
+): HTMLElement {
+  const locked = nb.status === 'locked';
+  const sched = tSchedules.get(nb.id) ?? '';
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;flex-direction:column;border-top:1px solid var(--border-subtle)';
+
+  const row = document.createElement('div');
+  row.style.cssText =
+    'display:flex;align-items:center;gap:12px;padding:9px 16px;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out)';
+  row.addEventListener('mouseenter', () => {
+    row.style.background = 'rgba(0,0,0,0.025)';
+  });
+  row.addEventListener('mouseleave', () => {
+    row.style.background = 'transparent';
+  });
+  row.appendChild(
+    statusIcon(nb.status === 'done' ? 'done' : locked ? 'backlog' : 'started', 14)
+  );
+  const title = document.createElement('span');
+  title.style.cssText =
+    'font-size:12.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)';
+  title.textContent = nb.title;
+  row.appendChild(title);
+
+  if (sched) {
+    const pill = document.createElement('span');
+    pill.style.cssText =
+      'font-size:11px;font-weight:500;color:var(--accent-text);background:var(--accent-subtle-bg);border-radius:999px;padding:2px 9px;white-space:nowrap';
+    pill.textContent = `Releases ${new Date(sched).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })}`;
+    row.appendChild(pill);
+  }
+
+  const stateLbl = document.createElement('span');
+  stateLbl.style.cssText =
+    'font-size:11.5px;font-weight:500;white-space:nowrap;color:' +
+    (locked
+      ? sched
+        ? 'var(--accent-text)'
+        : 'var(--text-quaternary)'
+      : 'var(--green-400)');
+  stateLbl.textContent = locked ? (sched ? 'Scheduled' : 'Locked') : 'Unlocked';
+  row.appendChild(stateLbl);
+
+  const toggleBtn = button(locked ? 'Unlock now' : 'Lock', 'secondary');
+  toggleBtn.style.height = 'var(--control-sm)';
+  toggleBtn.style.fontSize = '12px';
+  toggleBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    nb.status = locked ? 'available' : 'locked';
+    if (!locked) tSchedules.delete(nb.id);
+    else tSchedules.delete(nb.id);
+    repaint();
+  });
+  row.appendChild(toggleBtn);
+
+  const chev = document.createElement('span');
+  chev.style.cssText =
+    'font-size:10px;color:var(--text-quaternary);width:12px;text-align:center';
+  chev.textContent = tExpand.get(nb.id) ? '▴' : '▾';
+  row.appendChild(chev);
+
+  row.addEventListener('click', () => {
+    tExpand.set(nb.id, !tExpand.get(nb.id));
+    repaint();
+  });
+  wrap.appendChild(row);
+
+  // Expanded: timed release
+  if (tExpand.get(nb.id)) {
+    const panel = document.createElement('div');
+    panel.style.cssText =
+      'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 16px 14px 42px';
+    const capsLbl = document.createElement('span');
+    capsLbl.style.cssText =
+      'font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary)';
+    capsLbl.textContent = 'Timed release';
+    panel.appendChild(capsLbl);
+    const dt = document.createElement('input');
+    dt.type = 'datetime-local';
+    dt.value = sched;
+    dt.style.cssText =
+      'background:var(--bg-panel);color:var(--text-primary);border:1px solid var(--border-default);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--font-sans);outline:none';
+    dt.addEventListener('change', () => {
+      if (dt.value) {
+        tSchedules.set(nb.id, dt.value);
+        nb.status = 'locked';
+      } else {
+        tSchedules.delete(nb.id);
+      }
+      repaint();
+    });
+    panel.appendChild(dt);
+    if (sched) {
+      const clear = document.createElement('span');
+      clear.style.cssText =
+        'font-size:11.5px;color:var(--text-quaternary);cursor:pointer';
+      clear.textContent = 'Clear';
+      clear.addEventListener('mouseenter', () => (clear.style.color = 'var(--red-400)'));
+      clear.addEventListener('mouseleave', () => (clear.style.color = 'var(--text-quaternary)'));
+      clear.addEventListener('click', () => {
+        tSchedules.delete(nb.id);
+        repaint();
+      });
+      panel.appendChild(clear);
+    }
+    const hint = document.createElement('span');
+    hint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+    hint.textContent =
+      'Locks the notebook until the chosen time, then releases it automatically.';
+    panel.appendChild(hint);
+    wrap.appendChild(panel);
+  }
+
+  return wrap;
 }
 
 // ── Tasks authoring ───────────────────────────────────────────────
 function renderTasks(host: HTMLElement, app: NotebookMindApp): void {
-  const intro = infoBox(
-    'Pick a notebook, then author or AI-generate challenges per cell. Saved tasks replace the built-in ones in Learn mode.',
-    'info'
-  );
-  intro.style.marginBottom = '16px';
-  host.appendChild(intro);
-
+  const COURSE = activeData();
+  host.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   const openable = Object.values(COURSE.notebooks).filter(n => n.path);
 
-  // Notebook picker — makes it clear which sheet is being edited.
-  const picker = card();
-  picker.appendChild(sectionTitle('Notebook to edit'));
+  // Notebook picker row (prototype)
+  const picker = document.createElement('div');
+  picker.style.cssText =
+    'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+  const pickLbl = document.createElement('span');
+  pickLbl.style.cssText =
+    'font-size:13px;font-weight:500;color:var(--text-secondary)';
+  pickLbl.textContent = 'Notebook';
+  picker.appendChild(pickLbl);
   const sel = document.createElement('select');
   sel.style.cssText =
-    'width:100%;box-sizing:border-box;font-family:var(--nm-font-sans);font-size:14px;padding:9px 11px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);background:#fff;color:var(--nm-fg)';
+    'height:38px;box-sizing:border-box;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:0 32px 0 12px;font-size:13px;font-family:var(--font-sans);line-height:1.2;outline:none';
   openable.forEach(n => {
     const o = document.createElement('option');
     o.value = n.path as string;
-    o.textContent = `${n.title}  ·  ${basename(n.path as string)}  ·  Week ${n.week}`;
+    o.textContent = `Week ${n.week} · ${n.title}`;
     sel.appendChild(o);
   });
-  const editing = document.createElement('div');
-  editing.style.cssText =
-    'font-size:12.5px;color:var(--nm-fg-muted);margin-top:8px;font-weight:600';
   picker.appendChild(sel);
+  const editing = document.createElement('span');
+  editing.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
   picker.appendChild(editing);
   host.appendChild(picker);
 
   const listHost = document.createElement('div');
+  listHost.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   host.appendChild(listHost);
 
   function load(path: string, title: string): void {
-    editing.textContent = `Editing: ${title} (${basename(path)})`;
+    editing.textContent = `Author or AI-generate the challenge students practice on each cell — editing ${basename(path)}.`;
     listHost.innerHTML = '';
     listHost.appendChild(spinner('Loading notebook cells…'));
     void loadNotebook(app.services.contents, path, title)
@@ -632,15 +813,23 @@ function renderTasks(host: HTMLElement, app: NotebookMindApp): void {
 }
 
 function cellAuthor(key: string, i: number, source: string): HTMLElement {
-  const c = card();
+  const c = document.createElement('div');
+  c.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
   const t = document.createElement('div');
   t.style.cssText =
-    'display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px;font-weight:700;color:var(--nm-fg-strong);margin-bottom:8px';
+    'display:flex;align-items:center;gap:10px;padding:11px 16px';
+  const num = document.createElement('span');
+  num.style.cssText =
+    'font-size:11px;font-weight:600;color:var(--text-quaternary);font-family:var(--font-mono);flex:0 0 auto';
+  num.textContent = String(i + 1).padStart(2, '0');
   const tl = document.createElement('span');
-  tl.textContent = `Cell ${i + 1} · ${cellTitle(key, source, i)}`;
-  const toggle = button('Author task', 'secondary');
-  toggle.style.padding = '6px 12px';
-  toggle.style.fontSize = '12px';
+  tl.style.cssText =
+    'font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)';
+  tl.textContent = cellTitle(key, source, i);
+  const toggle = button('Author', 'ghost');
+  toggle.style.height = 'var(--control-md)';
+  t.appendChild(num);
   t.appendChild(tl);
   t.appendChild(toggle);
   c.appendChild(t);
@@ -657,10 +846,11 @@ function cellAuthor(key: string, i: number, source: string): HTMLElement {
         built = true;
       }
       formHost.style.display = 'block';
+      formHost.style.padding = '0 16px 14px';
       toggle.textContent = 'Hide';
     } else {
       formHost.style.display = 'none';
-      toggle.textContent = 'Author task';
+      toggle.textContent = 'Author';
     }
   });
   return c;
@@ -857,37 +1047,3 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
   return wrap;
 }
 
-// ── Submissions ───────────────────────────────────────────────────
-function renderSubmissions(host: HTMLElement): void {
-  const c = card();
-  c.appendChild(sectionTitle('Recent submissions'));
-  const header = document.createElement('div');
-  header.style.cssText =
-    'display:grid;grid-template-columns:32px 1fr 1fr 90px 80px;gap:10px;padding:6px 0;font-size:11px;font-weight:700;color:var(--nm-fg-subtle);text-transform:uppercase;letter-spacing:0.04em;font-family:var(--nm-font-mono)';
-  ['', 'Student', 'Notebook', 'When', 'XP'].forEach(htxt => {
-    const d = document.createElement('div');
-    d.textContent = htxt;
-    header.appendChild(d);
-  });
-  c.appendChild(header);
-
-  SUBMISSIONS.forEach(s => {
-    const row = document.createElement('div');
-    row.style.cssText =
-      'display:grid;grid-template-columns:32px 1fr 1fr 90px 80px;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--nm-border-subtle)';
-    row.appendChild(avatar(s.student, 28));
-    row.appendChild(cellText(s.student, true));
-    row.appendChild(cellText(s.notebook, false));
-    row.appendChild(cellText(s.when, false, 'var(--nm-fg-subtle)'));
-    row.appendChild(cellText(`${s.xp} XP`, true));
-    c.appendChild(row);
-  });
-  host.appendChild(c);
-}
-
-function cellText(text: string, strong: boolean, color?: string): HTMLElement {
-  const d = document.createElement('div');
-  d.style.cssText = `font-size:13px;color:${color ?? 'var(--nm-fg)'};font-weight:${strong ? 600 : 400};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
-  d.textContent = text;
-  return d;
-}

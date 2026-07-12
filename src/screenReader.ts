@@ -2,7 +2,7 @@ import { IPageData, IExtractResult, extractPdfFull } from './pdfExtract';
 import { isAiReady, askAboutCell } from './gemini';
 import { isConnected } from './supabase';
 import {
-  upsertDocument, upsertSectionNote, getSectionNotes, addPoints,
+  upsertDocument, getSectionNotes, addPoints,
   getDocumentFlashcards, upsertFlashcardsForSection, updateFlashcard,
   updateDocumentSections, IFlashcard
 } from './supabaseDB';
@@ -56,7 +56,7 @@ interface IReaderState {
   fcFlipped: boolean;
   fcGenerating: boolean;
   fcViewMode: 'section' | 'due' | 'all';
-  activeTab: 'notes' | 'quiz' | 'flashcards';
+  activeTab: 'quiz' | 'flashcards';
   isFullscreen: boolean;
 }
 
@@ -68,7 +68,7 @@ const state: IReaderState = {
   quizLoading: false, quizDone: false,
   fcStudying: false, fcStudyCards: [], fcIdx: 0, fcFlipped: false, fcGenerating: false,
   fcViewMode: 'section',
-  activeTab: 'notes', isFullscreen: false
+  activeTab: 'quiz', isFullscreen: false
 };
 
 // ── Spaced repetition ──────────────────────────────────────────
@@ -132,7 +132,7 @@ export function loadReaderWithPages(
     flashcards: [], quizQuestions: null, quizAnswers: [], quizIdx: 0,
     quizLoading: false, quizDone: false,
     fcStudying: false, fcStudyCards: [], fcIdx: 0, fcFlipped: false, fcGenerating: false,
-    fcViewMode: 'section', activeTab: 'notes'
+    fcViewMode: 'section', activeTab: 'quiz'
   });
   // Load flashcards from Supabase if connected
   if (docId && isConnected()) {
@@ -153,44 +153,46 @@ export function renderReader(
 }
 
 function _render(): void {
-  if (!_host || !_onToggle) return;
+  if (!_host) return;
   const host = _host;
-  const onToggleFullscreen = _onToggle;
+  const onExit = _onToggle; // repurposed: exit the reader (back to library)
   host.innerHTML = '';
-  host.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--nm-bg)';
+  host.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--bg-app)';
 
-  // Top bar
-  const topBar = document.createElement('div');
-  topBar.style.cssText = [
-    'display:flex;align-items:center;justify-content:space-between',
-    'padding:8px 14px;border-bottom:1px solid var(--nm-border)',
-    'background:#fff;flex-shrink:0;gap:8px'
-  ].join(';');
+  // Prototype header: back link over an 18px title, shortcuts ghost right.
+  const header = document.createElement('div');
+  header.style.cssText =
+    'display:flex;align-items:flex-end;gap:12px;padding:14px 24px 12px;flex-shrink:0';
 
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size:13px;font-weight:700;color:var(--nm-fg-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0';
-  titleEl.textContent = state.doc ? `📄 ${state.docTitle}` : '📄 Slides & Papers';
-
-  const rightBtns = document.createElement('div');
-  rightBtns.style.cssText = 'display:flex;align-items:center;gap:6px;flex-shrink:0';
+  const headCol = document.createElement('div');
+  headCol.style.cssText =
+    'display:flex;flex-direction:column;gap:6px;flex:1;min-width:0';
+  const backEl = document.createElement('span');
+  backEl.style.cssText =
+    'display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--text-tertiary);cursor:pointer;align-self:flex-start;transition:color var(--dur-fast) var(--ease-out)';
+  backEl.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>Back to Slides &amp; Papers';
+  backEl.addEventListener('mouseenter', () => {
+    backEl.style.color = 'var(--text-primary)';
+  });
+  backEl.addEventListener('mouseleave', () => {
+    backEl.style.color = 'var(--text-tertiary)';
+  });
+  if (onExit) backEl.addEventListener('click', () => onExit(false));
+  const titleEl = document.createElement('h1');
+  titleEl.style.cssText =
+    'margin:0;font-size:18px;font-weight:600;letter-spacing:-0.016em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)';
+  titleEl.textContent = state.docTitle || 'Slides & Papers';
+  headCol.appendChild(backEl);
+  headCol.appendChild(titleEl);
+  header.appendChild(headCol);
 
   if (state.doc) {
-    const kbBtn = _topBtn('?', 'Keyboard shortcuts');
+    const kbBtn = _btn('Keyboard shortcuts', 'ghost');
     kbBtn.addEventListener('click', () => _showShortcuts());
-    rightBtns.appendChild(kbBtn);
+    header.appendChild(kbBtn);
   }
-
-  const fsBtn = _topBtn(state.isFullscreen ? '⊙ Exit full' : '⊡ Full view', 'Toggle fullscreen reader');
-  fsBtn.addEventListener('click', () => {
-    state.isFullscreen = !state.isFullscreen;
-    onToggleFullscreen(state.isFullscreen);
-    _render();
-  });
-  rightBtns.appendChild(fsBtn);
-
-  topBar.appendChild(titleEl);
-  topBar.appendChild(rightBtns);
-  host.appendChild(topBar);
+  host.appendChild(header);
 
   // Content
   const content = document.createElement('div');
@@ -199,20 +201,10 @@ function _render(): void {
 
   if (!state.doc) {
     _renderUpload(content);
-  } else if (!state.isFullscreen) {
-    _renderCompact(content);
-  } else {
-    _renderFull(content);
-    _installKeyboard();
+    return;
   }
-}
-
-function _topBtn(label: string, title: string): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.title = title;
-  b.style.cssText = 'background:none;border:1px solid var(--nm-border);border-radius:7px;padding:4px 9px;font-size:12px;cursor:pointer;color:var(--nm-fg-muted);white-space:nowrap';
-  return b;
+  _renderFull(content);
+  _installKeyboard();
 }
 
 // ── Upload prompt ──────────────────────────────────────────────
@@ -280,7 +272,7 @@ function _renderUpload(content: HTMLElement): void {
     }
   };
 
-  zone.addEventListener('mouseenter', () => { zone.style.borderColor = 'var(--nm-primary)'; zone.style.background = '#fff7f4'; });
+  zone.addEventListener('mouseenter', () => { zone.style.borderColor = 'var(--nm-primary)'; zone.style.background = 'var(--nm-accent-soft)'; });
   zone.addEventListener('mouseleave', () => { zone.style.borderColor = 'var(--nm-border-strong)'; zone.style.background = 'var(--nm-bg-elev-2)'; });
   zone.addEventListener('click', () => fileInput.click());
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.borderColor = 'var(--nm-primary)'; });
@@ -293,346 +285,240 @@ function _renderUpload(content: HTMLElement): void {
   content.appendChild(wrap);
 }
 
-// ── Compact view (split mode) ──────────────────────────────────
-
-function _renderCompact(content: HTMLElement): void {
-  const sec = state.sections[state.currentSection];
-  if (!sec) return;
-  const page = sec.pages[state.currentPage] ?? sec.pages[0];
-
-  content.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0';
-
-  // Section tabs (compact strip)
-  if (state.sections.length > 1) {
-    const strip = document.createElement('div');
-    strip.style.cssText = 'display:flex;overflow-x:auto;background:#f4f3ef;border-bottom:1px solid var(--nm-border);flex-shrink:0;padding:0 4px';
-    state.sections.forEach((s, i) => {
-      const tab = document.createElement('button');
-      tab.style.cssText = [
-        'padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;white-space:nowrap',
-        `font-weight:${i === state.currentSection ? '700' : '400'}`,
-        `color:${i === state.currentSection ? 'var(--nm-primary)' : 'var(--nm-fg-muted)'}`,
-        `border-bottom:2px solid ${i === state.currentSection ? 'var(--nm-primary)' : 'transparent'}`
-      ].join(';');
-      tab.textContent = s.understood ? `✓ S${i + 1}` : `S${i + 1}`;
-      tab.addEventListener('click', () => { state.currentSection = i; state.currentPage = 0; _render(); });
-      strip.appendChild(tab);
-    });
-    content.appendChild(strip);
-  }
-
-  // Page view
-  const pageView = document.createElement('div');
-  pageView.style.cssText = 'flex:1;overflow-y:auto;padding:10px;display:flex;justify-content:center;align-items:flex-start;background:#f4f3ef;min-height:0';
-  if (page?.imageBase64) {
-    const img = document.createElement('img');
-    img.src = `data:image/jpeg;base64,${page.imageBase64}`;
-    img.style.cssText = 'max-width:100%;height:auto;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,0.15)';
-    pageView.appendChild(img);
-  } else {
-    const textBox = document.createElement('div');
-    textBox.style.cssText = 'font-size:13px;line-height:1.6;color:var(--nm-fg);max-width:100%;white-space:pre-wrap;font-family:var(--nm-font-sans);background:#fff;padding:14px;border-radius:8px;width:100%;box-sizing:border-box';
-    textBox.textContent = page?.text || '(empty)';
-    pageView.appendChild(textBox);
-  }
-
-  // Nav
-  const nav = document.createElement('div');
-  nav.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:7px 12px;border-top:1px solid var(--nm-border);background:#fff;flex-shrink:0';
-  const prevP = _navBtn('‹');
-  prevP.disabled = state.currentPage === 0 && state.currentSection === 0;
-  const pageLabel = document.createElement('div');
-  pageLabel.style.cssText = 'font-size:12px;color:var(--nm-fg-muted);min-width:90px;text-align:center';
-  pageLabel.textContent = `S${state.currentSection + 1} · P${state.currentPage + 1}/${sec.pages.length}`;
-  const nextP = _navBtn('›');
-  nextP.disabled = state.currentPage >= sec.pages.length - 1 && state.currentSection >= state.sections.length - 1;
-
-  prevP.addEventListener('click', () => {
-    if (state.currentPage > 0) state.currentPage--;
-    else if (state.currentSection > 0) { state.currentSection--; state.currentPage = state.sections[state.currentSection].pages.length - 1; }
-    _render();
-  });
-  nextP.addEventListener('click', () => {
-    if (state.currentPage < sec.pages.length - 1) state.currentPage++;
-    else if (state.currentSection < state.sections.length - 1) { state.currentSection++; state.currentPage = 0; }
-    _render();
-  });
-
-  nav.appendChild(prevP);
-  nav.appendChild(pageLabel);
-  nav.appendChild(nextP);
-
-  // Quick note
-  const noteWrap = document.createElement('div');
-  noteWrap.style.cssText = 'padding:6px 10px;border-top:1px solid var(--nm-border);background:#fff;flex-shrink:0';
-  const ta = document.createElement('textarea');
-  ta.placeholder = '✏️ Note for this section…';
-  ta.value = state.notes[state.currentSection] ?? '';
-  ta.style.cssText = 'width:100%;box-sizing:border-box;border:1.5px solid var(--nm-border);border-radius:8px;padding:6px 9px;font-size:12px;font-family:inherit;resize:none;outline:none;color:var(--nm-fg);background:#fafaf7;height:44px';
-  ta.addEventListener('focus', () => { ta.style.borderColor = 'var(--nm-primary)'; });
-  ta.addEventListener('blur', () => {
-    ta.style.borderColor = 'var(--nm-border)';
-    _saveNote(state.currentSection, ta.value.trim());
-  });
-  noteWrap.appendChild(ta);
-
-  content.appendChild(pageView);
-  content.appendChild(nav);
-  content.appendChild(noteWrap);
-}
-
 // ── Full view ──────────────────────────────────────────────────
 
 function _renderFull(content: HTMLElement): void {
   content.innerHTML = '';
-  content.style.cssText = 'flex:1;display:flex;overflow:hidden;min-height:0;background:var(--nm-bg)';
+  content.style.cssText =
+    'flex:1;display:grid;grid-template-columns:minmax(150px,220px) minmax(320px,1fr) minmax(240px,320px);gap:0;min-height:0;border-top:1px solid var(--border-subtle);overflow:hidden';
 
-  // LEFT: section sidebar
+  // ── LEFT: sections ────────────────────────────────────────────
   const sidebar = document.createElement('div');
-  sidebar.style.cssText = [
-    'width:190px;flex-shrink:0;overflow-y:auto;background:#f4f3ef',
-    'border-right:1px solid var(--nm-border);display:flex;flex-direction:column'
-  ].join(';');
-
-  const sideHead = document.createElement('div');
-  sideHead.style.cssText = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--nm-fg-subtle);padding:10px 12px 6px;font-family:var(--nm-font-mono)';
-  sideHead.textContent = 'Sections';
-  sidebar.appendChild(sideHead);
+  sidebar.style.cssText =
+    'border-right:1px solid var(--border-subtle);overflow-y:auto;padding:14px 10px;display:flex;flex-direction:column;gap:2px;min-height:0';
 
   const understood = state.sections.filter(s => s.understood).length;
+  const progRow = document.createElement('div');
+  progRow.style.cssText =
+    'padding:0 8px 10px;display:flex;flex-direction:column;gap:6px';
+  progRow.innerHTML = `<span style="font-size:11px;font-weight:600;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em">${understood} of ${state.sections.length} understood</span>`;
   const progBar = document.createElement('div');
-  progBar.style.cssText = 'margin:0 12px 8px;background:var(--nm-border);border-radius:4px;height:4px;overflow:hidden';
+  progBar.style.cssText =
+    'height:4px;border-radius:2px;background:var(--gray-800);overflow:hidden';
   const progFill = document.createElement('div');
-  progFill.style.cssText = `height:100%;background:var(--nm-accent);border-radius:4px;width:${state.sections.length ? (understood / state.sections.length * 100).toFixed(0) : 0}%;transition:width 0.3s`;
+  progFill.style.cssText = `height:100%;border-radius:2px;background:var(--green-500);transition:width 0.3s ease-out;width:${state.sections.length ? ((understood / state.sections.length) * 100).toFixed(0) : 0}%`;
   progBar.appendChild(progFill);
-  sidebar.appendChild(progBar);
+  progRow.appendChild(progBar);
+  sidebar.appendChild(progRow);
 
   state.sections.forEach((s, i) => {
-    const item = document.createElement('div');
     const isActive = i === state.currentSection;
+    const item = document.createElement('div');
     item.style.cssText = [
-      'display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;transition:background 120ms',
-      `background:${isActive ? '#fff' : 'transparent'}`,
-      `border-left:3px solid ${isActive ? 'var(--nm-primary)' : 'transparent'}`
+      'display:flex;align-items:center;gap:10px;padding:8px;border-radius:7px;cursor:pointer',
+      'transition:background-color var(--dur-fast) var(--ease-out)',
+      isActive
+        ? 'background:rgba(0,0,0,0.05);color:var(--text-primary)'
+        : 'color:var(--text-secondary)'
     ].join(';');
-    item.addEventListener('click', () => { state.currentSection = i; state.currentPage = 0; _render(); });
-    item.addEventListener('mouseenter', () => { if (!isActive) item.style.background = 'rgba(255,255,255,0.6)'; });
-    item.addEventListener('mouseleave', () => { if (!isActive) item.style.background = 'transparent'; });
+    item.addEventListener('click', () => {
+      state.currentSection = i;
+      state.currentPage = 0;
+      _render();
+    });
+    if (!isActive) {
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'rgba(0,0,0,0.03)';
+      });
+      item.addEventListener('mouseleave', () => {
+        item.style.background = 'transparent';
+      });
+    }
 
-    // Ring indicator
-    const ring = _progressRing(20, s.understood ? 100 : 0, s.understood ? 'var(--nm-accent)' : 'var(--nm-border)');
-    ring.style.flexShrink = '0';
+    const mark = document.createElement('span');
+    mark.style.cssText =
+      'flex:0 0 auto;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;font-family:var(--font-mono);' +
+      (s.understood
+        ? 'background:var(--green-500);color:#fff'
+        : 'border:1px solid var(--border-strong);color:var(--text-quaternary)');
+    if (s.understood) {
+      mark.innerHTML =
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    } else {
+      mark.textContent = String(i + 1);
+    }
 
-    const label = document.createElement('div');
-    label.style.cssText = `font-size:11.5px;font-weight:${isActive ? '700' : '500'};color:${isActive ? 'var(--nm-fg-strong)' : 'var(--nm-fg-muted)'};line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical`;
+    const label = document.createElement('span');
+    label.style.cssText =
+      'font-size:12.5px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical';
     label.textContent = s.title;
 
-    item.appendChild(ring);
+    item.appendChild(mark);
     item.appendChild(label);
     sidebar.appendChild(item);
   });
 
-  // CENTER: page viewer
+  // ── CENTER: page ──────────────────────────────────────────────
   const center = document.createElement('div');
-  center.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0';
+  center.style.cssText =
+    'overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0';
   const sec = state.sections[state.currentSection];
   const page = sec?.pages[state.currentPage] ?? sec?.pages[0];
 
-  // Section header
-  const secHeader = document.createElement('div');
-  secHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--nm-border);background:#fff;flex-shrink:0;gap:8px';
-  const secTitle = document.createElement('div');
-  secTitle.style.cssText = 'font-size:14px;font-weight:700;color:var(--nm-fg-strong);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-  secTitle.textContent = sec?.title ?? '';
-
-  const understoodBtn = document.createElement('button');
-  understoodBtn.style.cssText = [
-    'padding:5px 12px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;flex-shrink:0',
-    sec?.understood
-      ? 'background:var(--nm-accent);color:#fff;border-color:var(--nm-accent)'
-      : 'background:#fff;color:var(--nm-fg-muted);border-color:var(--nm-border)'
-  ].join(';');
-  understoodBtn.textContent = sec?.understood ? '✓ Understood' : 'Mark understood';
-  understoodBtn.title = 'U';
-  understoodBtn.addEventListener('click', () => _toggleUnderstood());
-
-  secHeader.appendChild(secTitle);
-  secHeader.appendChild(understoodBtn);
-  center.appendChild(secHeader);
-
-  // Page display
-  const pageArea = document.createElement('div');
-  pageArea.style.cssText = 'flex:1;overflow-y:auto;padding:18px;display:flex;justify-content:center;align-items:flex-start;background:#e8e6e0;min-height:0';
-
+  // Slide card
+  const slide = document.createElement('div');
   if (page?.imageBase64) {
+    slide.style.cssText =
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07);overflow:hidden';
     const img = document.createElement('img');
     img.src = `data:image/jpeg;base64,${page.imageBase64}`;
-    img.style.cssText = 'max-width:100%;max-height:100%;height:auto;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.22)';
-    pageArea.appendChild(img);
+    img.style.cssText = 'display:block;width:100%;height:auto';
+    slide.appendChild(img);
   } else {
-    const textBox = document.createElement('div');
-    textBox.style.cssText = 'font-size:14px;line-height:1.7;color:var(--nm-fg);max-width:680px;white-space:pre-wrap;font-family:var(--nm-font-sans);background:#fff;padding:26px 30px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,0.10);width:100%;box-sizing:border-box';
-    textBox.textContent = page?.text || '(empty)';
-    pageArea.appendChild(textBox);
+    slide.style.cssText =
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07);padding:34px 40px;display:flex;flex-direction:column;gap:18px;min-height:0';
+    const eyebrow = document.createElement('span');
+    eyebrow.style.cssText =
+      'font-size:11px;font-weight:600;color:var(--accent-text);text-transform:uppercase;letter-spacing:0.08em';
+    eyebrow.textContent = sec?.title ?? '';
+    const body = document.createElement('div');
+    body.style.cssText =
+      'font-size:clamp(13px, 1.4vw, 15px);color:var(--text-secondary);line-height:1.6;white-space:pre-wrap;font-family:var(--font-sans)';
+    body.textContent = page?.text || '(empty)';
+    slide.appendChild(eyebrow);
+    slide.appendChild(body);
   }
-  center.appendChild(pageArea);
+  center.appendChild(slide);
 
-  // Page nav within section
+  // Nav row + understood toggle
   const navRow = document.createElement('div');
-  navRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;padding:9px;border-top:1px solid var(--nm-border);background:#fff;flex-shrink:0;flex-wrap:wrap';
+  navRow.style.cssText =
+    'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
 
-  if (state.currentSection > 0 || state.currentPage > 0) {
-    const prevBtn = _btn('← Prev', 'ghost');
-    prevBtn.addEventListener('click', () => {
-      if (state.currentPage > 0) state.currentPage--;
-      else if (state.currentSection > 0) { state.currentSection--; state.currentPage = state.sections[state.currentSection].pages.length - 1; }
-      _render();
-    });
-    navRow.appendChild(prevBtn);
-  }
+  const prevBtn = _btn('← Prev', 'secondary');
+  const atStart = state.currentSection === 0 && state.currentPage === 0;
+  prevBtn.disabled = atStart;
+  if (atStart) prevBtn.style.opacity = '0.45';
+  prevBtn.addEventListener('click', () => {
+    if (state.currentPage > 0) state.currentPage--;
+    else if (state.currentSection > 0) {
+      state.currentSection--;
+      state.currentPage = state.sections[state.currentSection].pages.length - 1;
+    }
+    _render();
+  });
+  navRow.appendChild(prevBtn);
 
-  const pageCount = document.createElement('div');
-  pageCount.style.cssText = 'font-size:12px;color:var(--nm-fg-muted);min-width:120px;text-align:center';
-  pageCount.textContent = sec ? `Page ${state.currentPage + 1} / ${sec.pages.length}` : '';
+  const pageCount = document.createElement('span');
+  pageCount.style.cssText =
+    'font-size:12px;color:var(--text-quaternary);font-family:var(--font-mono);white-space:nowrap';
+  pageCount.textContent = sec
+    ? `page ${state.currentPage + 1} of ${sec.pages.length}`
+    : '';
   navRow.appendChild(pageCount);
 
-  const hasNext = sec && (state.currentPage < sec.pages.length - 1 || state.currentSection < state.sections.length - 1);
-  if (hasNext) {
-    const nextBtn = _btn('Next →', 'ghost');
-    nextBtn.addEventListener('click', () => {
-      if (sec && state.currentPage < sec.pages.length - 1) state.currentPage++;
-      else if (state.currentSection < state.sections.length - 1) { state.currentSection++; state.currentPage = 0; }
-      _render();
-    });
-    navRow.appendChild(nextBtn);
-  }
+  const nextBtn = _btn('Next →', 'secondary');
+  const atEnd =
+    !sec ||
+    (state.currentPage >= sec.pages.length - 1 &&
+      state.currentSection >= state.sections.length - 1);
+  nextBtn.disabled = atEnd;
+  if (atEnd) nextBtn.style.opacity = '0.45';
+  nextBtn.addEventListener('click', () => {
+    if (sec && state.currentPage < sec.pages.length - 1) state.currentPage++;
+    else if (state.currentSection < state.sections.length - 1) {
+      state.currentSection++;
+      state.currentPage = 0;
+    }
+    _render();
+  });
+  navRow.appendChild(nextBtn);
 
+  const navSpacer = document.createElement('span');
+  navSpacer.style.flex = '1';
+  navRow.appendChild(navSpacer);
+
+  // Understood toggle pill
+  const uOn = !!sec?.understood;
+  const uBtn = document.createElement('div');
+  uBtn.style.cssText = [
+    'display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:7px;cursor:pointer;white-space:nowrap',
+    'transition:border-color var(--dur-fast) var(--ease-out)',
+    `border:1px solid ${uOn ? 'rgba(23,138,84,0.45)' : 'var(--border-default)'}`,
+    uOn ? 'background:var(--green-bg)' : ''
+  ].join(';');
+  const uDot = document.createElement('span');
+  uDot.style.cssText =
+    'width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;' +
+    (uOn ? 'background:var(--green-500)' : 'border:1.5px solid var(--border-strong)');
+  if (uOn) {
+    uDot.innerHTML =
+      '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  }
+  const uText = document.createElement('span');
+  uText.style.cssText =
+    'font-size:12.5px;font-weight:500;color:var(--text-primary)';
+  uText.textContent = uOn ? 'Section understood' : 'Mark section understood';
+  uBtn.appendChild(uDot);
+  uBtn.appendChild(uText);
+  uBtn.title = 'U';
+  uBtn.addEventListener('mouseenter', () => {
+    uBtn.style.borderColor = uOn ? 'rgba(23,138,84,0.45)' : 'var(--border-strong)';
+  });
+  uBtn.addEventListener('click', () => _toggleUnderstood());
+  navRow.appendChild(uBtn);
   center.appendChild(navRow);
 
-  // RIGHT: feature panel
+  // ── RIGHT: study panel ────────────────────────────────────────
   const panel = document.createElement('div');
-  panel.style.cssText = 'width:310px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--nm-border);background:#fff;overflow:hidden';
+  panel.style.cssText =
+    'border-left:1px solid var(--border-subtle);background:var(--bg-app);overflow-y:auto;display:flex;flex-direction:column;min-height:0';
 
-  // Tab bar
-  const tabs: Array<{ key: IReaderState['activeTab']; label: string }> = [
-    { key: 'notes', label: '✏️ Notes' },
-    { key: 'quiz', label: '🧠 Quiz' },
-    { key: 'flashcards', label: '🃏 Cards' }
+  const tabHead = document.createElement('div');
+  tabHead.style.cssText =
+    'display:flex;gap:2px;padding:10px 12px;border-bottom:1px solid var(--border-subtle);flex-shrink:0';
+  const tabs: Array<{ id: IReaderState['activeTab']; label: string }> = [
+    { id: 'quiz', label: 'Quiz' },
+    { id: 'flashcards', label: 'Flashcards' }
   ];
-  const tabBar = document.createElement('div');
-  tabBar.style.cssText = 'display:flex;border-bottom:1px solid var(--nm-border);flex-shrink:0';
+  tabs.forEach(t => {
+    const b = document.createElement('span');
+    const on = state.activeTab === t.id;
+    b.textContent = t.label;
+    b.style.cssText = [
+      'flex:1;text-align:center;padding:6px 0;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer',
+      'transition:background-color var(--dur-fast) var(--ease-out)',
+      on
+        ? 'background:var(--accent-subtle-bg);color:var(--accent-text)'
+        : 'color:var(--text-tertiary)'
+    ].join(';');
+    if (!on) {
+      b.addEventListener('mouseenter', () => {
+        b.style.color = 'var(--text-primary)';
+      });
+      b.addEventListener('mouseleave', () => {
+        b.style.color = 'var(--text-tertiary)';
+      });
+    }
+    b.addEventListener('click', () => {
+      state.activeTab = t.id;
+      _render();
+    });
+    tabHead.appendChild(b);
+  });
 
   const tabContent = document.createElement('div');
-  tabContent.style.cssText = 'flex:1;overflow-y:auto;padding:14px';
+  tabContent.style.cssText =
+    'padding:14px;display:flex;flex-direction:column;gap:12px';
+  if (state.activeTab === 'quiz') _renderQuizTab(tabContent);
+  else _renderFlashcardsTab(tabContent);
 
-  const paintTabs = () => {
-    tabBar.innerHTML = '';
-    tabs.forEach(t => {
-      const b = document.createElement('button');
-      b.textContent = t.label;
-      const on = t.key === state.activeTab;
-      b.style.cssText = [
-        'flex:1;padding:10px 4px;border:none;background:none;cursor:pointer',
-        'font-size:12px;font-weight:600;font-family:inherit;transition:all 120ms ease',
-        `border-bottom:2.5px solid ${on ? 'var(--nm-primary)' : 'transparent'}`,
-        `color:${on ? 'var(--nm-primary)' : 'var(--nm-fg-muted)'}`
-      ].join(';');
-      b.addEventListener('click', () => { state.activeTab = t.key; paintTabs(); renderTabContent(); });
-      tabBar.appendChild(b);
-    });
-  };
-
-  const renderTabContent = () => {
-    tabContent.innerHTML = '';
-    if (state.activeTab === 'notes') _renderNotesTab(tabContent);
-    else if (state.activeTab === 'quiz') _renderQuizTab(tabContent);
-    else if (state.activeTab === 'flashcards') _renderFlashcardsTab(tabContent);
-  };
-
-  paintTabs();
-  panel.appendChild(tabBar);
+  panel.appendChild(tabHead);
   panel.appendChild(tabContent);
-  renderTabContent();
 
   content.appendChild(sidebar);
   content.appendChild(center);
   content.appendChild(panel);
-}
-
-// ── Notes tab ──────────────────────────────────────────────────
-
-function _renderNotesTab(host: HTMLElement): void {
-  const sec = state.sections[state.currentSection];
-  if (!sec) return;
-
-  const h = _label(`Notes — ${sec.title}`);
-  host.appendChild(h);
-
-  if (sec.text) {
-    const quote = document.createElement('div');
-    quote.style.cssText = 'font-size:11.5px;color:var(--nm-fg-muted);line-height:1.5;background:#f4f3ef;border-radius:7px;padding:7px 10px;margin-bottom:10px;max-height:70px;overflow:hidden;position:relative';
-    quote.textContent = sec.text.substring(0, 180) + (sec.text.length > 180 ? '…' : '');
-    host.appendChild(quote);
-  }
-
-  const ta = document.createElement('textarea');
-  ta.placeholder = 'Write your AHA moments, questions, or summary here…';
-  ta.value = state.notes[state.currentSection] ?? '';
-  ta.style.cssText = [
-    'width:100%;box-sizing:border-box;height:150px;resize:vertical',
-    'border:1.5px solid var(--nm-border);border-radius:9px;padding:10px 12px',
-    'font-size:13px;font-family:inherit;color:var(--nm-fg);line-height:1.55;outline:none;background:#fafaf7'
-  ].join(';');
-  ta.addEventListener('focus', () => { ta.style.borderColor = 'var(--nm-primary)'; });
-  ta.addEventListener('blur', async () => {
-    ta.style.borderColor = 'var(--nm-border)';
-    const val = ta.value.trim();
-    if (val !== (state.notes[state.currentSection] ?? '')) {
-      await _saveNote(state.currentSection, val);
-      if (val && isConnected()) {
-        await addPoints(5, 'reader_note', state.docTitle).catch(() => null);
-        pointsEngine.addPoints(5, 'reader_note');
-      }
-    }
-  });
-  host.appendChild(ta);
-
-  const hint = document.createElement('div');
-  hint.style.cssText = 'font-size:11px;color:var(--nm-fg-subtle);margin-top:6px';
-  hint.textContent = '💡 Auto-saves. +5 XP per note. Press U to mark section understood.';
-  host.appendChild(hint);
-
-  // Understood toggle inside notes
-  const sec2 = state.sections[state.currentSection];
-  const uBtn = document.createElement('button');
-  uBtn.style.cssText = [
-    'margin-top:12px;width:100%;padding:9px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;border:1.5px solid;transition:all 160ms',
-    sec2.understood
-      ? 'background:var(--nm-accent);color:#fff;border-color:var(--nm-accent)'
-      : 'background:#fff;color:var(--nm-fg-muted);border-color:var(--nm-border)'
-  ].join(';');
-  uBtn.textContent = sec2.understood ? '✓ Section understood' : 'Mark as understood';
-  uBtn.addEventListener('click', () => _toggleUnderstood());
-  host.appendChild(uBtn);
-
-  // Other noted sections
-  const notedOther = Object.entries(state.notes).filter(([k, v]) => v.trim() && Number(k) !== state.currentSection);
-  if (notedOther.length > 0) {
-    const sep = document.createElement('div');
-    sep.style.cssText = 'margin-top:16px;padding-top:12px;border-top:1px solid var(--nm-border)';
-    const sepLbl = document.createElement('div');
-    sepLbl.style.cssText = 'font-size:11px;font-weight:700;color:var(--nm-fg-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em';
-    sepLbl.textContent = `Other notes (${notedOther.length})`;
-    sep.appendChild(sepLbl);
-    notedOther.forEach(([idx, txt]) => {
-      const item = document.createElement('div');
-      item.style.cssText = 'font-size:11.5px;color:var(--nm-fg-muted);margin-bottom:7px;cursor:pointer;line-height:1.4';
-      item.innerHTML = `<span style="font-weight:700;color:var(--nm-fg)">S${Number(idx) + 1}</span> — ${txt.substring(0, 60)}${txt.length > 60 ? '…' : ''}`;
-      item.addEventListener('click', () => { state.currentSection = Number(idx); state.currentPage = 0; _render(); });
-      sep.appendChild(item);
-    });
-    host.appendChild(sep);
-  }
 }
 
 // ── Quiz tab ───────────────────────────────────────────────────
@@ -656,18 +542,18 @@ function _renderQuizTab(host: HTMLElement): void {
     return;
   }
 
-  // Generate button
-  const h = _label('Quiz this section');
-  host.appendChild(h);
+  // Idle: centered prompt (prototype)
+  const idle = document.createElement('div');
+  idle.style.cssText =
+    'display:flex;flex-direction:column;align-items:center;gap:10px;padding:26px 12px;text-align:center';
+  idle.innerHTML =
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+    `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">Test yourself on “${sec?.title ?? 'this section'}” with 5 AI-generated questions.</span>`;
+  host.appendChild(idle);
 
-  const hint = document.createElement('div');
-  hint.style.cssText = 'font-size:12.5px;color:var(--nm-fg-muted);margin-bottom:12px;line-height:1.5';
-  hint.textContent = '5 questions: multiple choice, true/false, fill-in, matching, open answer.';
-  host.appendChild(hint);
-
-  const genBtn = _btn('✨ Generate quiz', 'accent');
-  genBtn.style.width = '100%';
+  const genBtn = _btn('Generate quiz', 'primary');
   genBtn.disabled = !isAiReady() || !sec?.text;
+  idle.appendChild(genBtn);
   genBtn.addEventListener('click', async () => {
     state.quizLoading = true;
     state.quizQuestions = null;
@@ -697,13 +583,12 @@ Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],
     host.innerHTML = '';
     _renderQuizTab(host);
   });
-  host.appendChild(genBtn);
 
   if (!isAiReady()) {
-    const warn = document.createElement('div');
-    warn.style.cssText = 'font-size:11.5px;color:var(--nm-fg-muted);margin-top:8px';
-    warn.textContent = '⚠️ Set GEMINI_API_KEY to enable quiz.';
-    host.appendChild(warn);
+    const warn = document.createElement('span');
+    warn.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
+    warn.textContent = 'Set GEMINI_API_KEY to enable the quiz.';
+    idle.appendChild(warn);
   }
 }
 
@@ -718,12 +603,16 @@ function _renderQuizQuestion(host: HTMLElement): void {
   };
 
   const meta = document.createElement('div');
-  meta.style.cssText = 'font-size:11px;font-family:var(--nm-font-mono);color:var(--nm-fg-subtle);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em';
-  meta.textContent = `${state.quizIdx + 1} / ${total} · ${typeLabel[q.type] || q.type}`;
+  meta.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+  meta.innerHTML =
+    `<span style="font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono)">Question ${state.quizIdx + 1} / ${total}</span>` +
+    '<span style="flex:1"></span>' +
+    `<span style="font-size:11px;font-weight:600;color:var(--accent-text);text-transform:uppercase;letter-spacing:0.05em">${typeLabel[q.type] || q.type}</span>`;
   host.appendChild(meta);
 
   const qEl = document.createElement('div');
-  qEl.style.cssText = 'font-size:14px;font-weight:600;color:var(--nm-fg-strong);margin-bottom:14px;line-height:1.45';
+  qEl.style.cssText =
+    'font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:12px;line-height:1.5';
   qEl.textContent = q.question;
   host.appendChild(qEl);
 
@@ -746,12 +635,19 @@ function _renderQuizQuestion(host: HTMLElement): void {
     state.quizAnswers.push({ question: q, user_answer: answer, correct, feedback: q.explanation });
 
     feedback.innerHTML = '';
-    feedback.style.cssText = `margin-top:12px;padding:10px 12px;border-radius:9px;border-left:4px solid ${correct ? 'var(--nm-accent)' : 'var(--nm-danger)'};background:${correct ? '#f0fdf4' : '#fff1f1'};font-size:13px;line-height:1.5;color:var(--nm-fg)`;
-    feedback.innerHTML = `<strong style="color:${correct ? 'var(--nm-accent)' : 'var(--nm-danger)'}">${correct ? '✓ Correct' : '✗ Not quite'}</strong> — ${q.explanation}`;
+    feedback.style.cssText = `margin-top:10px;padding:8px 11px;border-radius:6px;font-size:12.5px;line-height:1.5;${
+      correct
+        ? 'background:var(--green-bg);color:var(--green-400);border:1px solid rgba(23,138,84,0.35)'
+        : 'background:var(--red-bg);color:var(--red-400);border:1px solid rgba(192,52,52,0.32)'
+    }`;
+    feedback.textContent = `${correct ? 'Correct!' : 'Not quite.'} ${q.explanation}`;
 
     submitArea.innerHTML = '';
-    const nextBtn = _btn(state.quizIdx < qs.length - 1 ? 'Next →' : 'See results', 'primary');
-    nextBtn.style.cssText += ';width:100%;margin-top:10px';
+    const nextBtn = _btn(
+      state.quizIdx < qs.length - 1 ? 'Next question' : 'See score',
+      'primary'
+    );
+    nextBtn.style.cssText += ';margin-top:10px';
     nextBtn.addEventListener('click', async () => {
       if (state.quizIdx < qs.length - 1) {
         state.quizIdx++;
@@ -786,16 +682,39 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
   const area = document.createElement('div');
   area.className = 'answer-area';
 
+  const OPT_BASE =
+    'padding:8px 11px;border-radius:7px;font-size:12.5px;cursor:pointer;background:var(--bg-base);transition:border-color var(--dur-fast) var(--ease-out);border:1px solid var(--border-subtle);color:var(--text-primary)';
+
   if (q.type === 'multiple_choice' || q.type === 'true_false') {
     const opts = q.type === 'true_false' ? ['True', 'False'] : q.options;
+    if (q.type === 'true_false') area.style.cssText = 'display:flex;gap:8px';
     opts.forEach(opt => {
-      const btn = document.createElement('button');
+      const btn = document.createElement('div');
       btn.textContent = opt;
-      btn.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:7px;border:1.5px solid var(--nm-border);border-radius:9px;background:#fff;cursor:pointer;font-size:13px;font-family:inherit;transition:all 120ms';
-      btn.addEventListener('mouseenter', () => { btn.style.borderColor = 'var(--nm-primary)'; btn.style.background = '#fff7f4'; });
-      btn.addEventListener('mouseleave', () => { btn.style.borderColor = 'var(--nm-border)'; btn.style.background = '#fff'; });
+      btn.style.cssText =
+        OPT_BASE +
+        (q.type === 'true_false'
+          ? ';flex:1;text-align:center'
+          : ';margin-bottom:6px');
+      btn.addEventListener('mouseenter', () => {
+        if (!btn.dataset.done) btn.style.borderColor = 'var(--border-strong)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        if (!btn.dataset.done) btn.style.borderColor = 'var(--border-subtle)';
+      });
       btn.addEventListener('click', () => {
-        area.querySelectorAll('button').forEach((b: Element) => (b as HTMLButtonElement).disabled = true);
+        if (btn.dataset.done) return;
+        area.querySelectorAll('div').forEach(b => {
+          (b as HTMLElement).dataset.done = '1';
+          (b as HTMLElement).style.cursor = 'default';
+        });
+        // Color the correct answer green, a wrong pick red.
+        const answer = String(q.correct_answer);
+        area.querySelectorAll('div').forEach(b => {
+          const el = b as HTMLElement;
+          if (el.textContent === answer) el.style.borderColor = 'var(--green-400)';
+        });
+        if (opt !== answer) btn.style.borderColor = 'var(--red-500)';
         onSubmit(opt);
       });
       area.appendChild(btn);
@@ -804,47 +723,73 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Type your answer…';
-    input.style.cssText = 'width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--nm-border);border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:var(--nm-fg);margin-bottom:8px';
-    input.addEventListener('focus', () => { input.style.borderColor = 'var(--nm-primary)'; });
-    const submitBtn = _btn('Submit', 'primary');
-    submitBtn.style.cssText += ';width:100%';
-    submitBtn.addEventListener('click', () => { if (input.value.trim()) { input.disabled = true; submitBtn.disabled = true; onSubmit(input.value.trim()); } });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && input.value.trim()) submitBtn.click(); });
+    input.style.cssText =
+      'width:100%;box-sizing:border-box;height:34px;padding:0 11px;background:var(--bg-base);border:1px solid var(--border-strong);border-radius:7px;font-size:12.5px;font-family:var(--font-sans);outline:none;color:var(--text-primary);margin-bottom:8px';
+    input.addEventListener('focus', () => {
+      input.style.borderColor = 'var(--accent)';
+    });
+    input.addEventListener('blur', () => {
+      input.style.borderColor = 'var(--border-strong)';
+    });
+    const submitBtn = _btn('Check', 'primary');
+    submitBtn.addEventListener('click', () => {
+      if (input.value.trim()) {
+        input.disabled = true;
+        submitBtn.style.display = 'none';
+        onSubmit(input.value.trim());
+      }
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && input.value.trim()) submitBtn.click();
+    });
     area.appendChild(input);
     area.appendChild(submitBtn);
   } else if (q.type === 'open_answer') {
     const ta = document.createElement('textarea');
-    ta.placeholder = '2–4 sentences…';
-    ta.rows = 4;
-    ta.style.cssText = 'width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--nm-border);border-radius:9px;font-size:13px;font-family:inherit;outline:none;resize:none;color:var(--nm-fg);margin-bottom:8px';
-    const submitBtn = _btn('Submit', 'primary');
-    submitBtn.style.cssText += ';width:100%';
-    submitBtn.addEventListener('click', () => { if (ta.value.trim()) { ta.disabled = true; submitBtn.disabled = true; onSubmit(ta.value.trim()); } });
+    ta.placeholder = 'Answer in your own words…';
+    ta.rows = 3;
+    ta.style.cssText =
+      'width:100%;box-sizing:border-box;resize:vertical;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:9px 11px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;outline:none;margin-bottom:8px';
+    ta.addEventListener('focus', () => {
+      ta.style.borderColor = 'var(--accent)';
+    });
+    ta.addEventListener('blur', () => {
+      ta.style.borderColor = 'var(--border-strong)';
+    });
+    const submitBtn = _btn('Check', 'primary');
+    submitBtn.addEventListener('click', () => {
+      if (ta.value.trim()) {
+        ta.disabled = true;
+        submitBtn.style.display = 'none';
+        onSubmit(ta.value.trim());
+      }
+    });
     area.appendChild(ta);
     area.appendChild(submitBtn);
   } else if (q.type === 'matching') {
-    // Show terms with dropdowns to pick definitions
     const terms = q.options.map(o => o.split(':')[0]?.trim() ?? o);
     const defs = (q.correct_answer as string[]).slice();
-    // Shuffle defs for choices
     const shuffled = [...defs].sort(() => Math.random() - 0.5);
     const selects: HTMLSelectElement[] = [];
-    terms.forEach((term, i) => {
+    terms.forEach(term => {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
-      const lbl = document.createElement('div');
-      lbl.style.cssText = 'font-size:13px;font-weight:600;color:var(--nm-fg);min-width:80px';
+      row.style.cssText =
+        'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      const lbl = document.createElement('span');
+      lbl.style.cssText =
+        'flex:0 0 92px;font-size:12px;font-weight:600;color:var(--text-primary);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       lbl.textContent = term;
       const sel = document.createElement('select');
-      sel.style.cssText = 'flex:1;padding:7px 9px;border:1.5px solid var(--nm-border);border-radius:8px;font-size:12.5px;font-family:inherit;background:#fff;color:var(--nm-fg)';
+      sel.style.cssText =
+        'flex:1;min-width:0;background:var(--bg-base);color:var(--text-secondary);border:1px solid var(--border-strong);border-radius:6px;padding:6px 8px;font-size:12px;font-family:var(--font-sans);outline:none';
       const placeholder = document.createElement('option');
       placeholder.value = '';
-      placeholder.textContent = 'Select…';
+      placeholder.textContent = '— pick the definition —';
       sel.appendChild(placeholder);
       shuffled.forEach(d => {
         const o = document.createElement('option');
         o.value = d;
-        o.textContent = d.length > 30 ? d.substring(0, 30) + '…' : d;
+        o.textContent = d.length > 40 ? d.substring(0, 40) + '…' : d;
         sel.appendChild(o);
       });
       selects.push(sel);
@@ -852,11 +797,14 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
       row.appendChild(sel);
       area.appendChild(row);
     });
-    const submitBtn = _btn('Submit matching', 'primary');
-    submitBtn.style.cssText += ';width:100%;margin-top:4px';
+    const submitBtn = _btn('Check', 'primary');
     submitBtn.addEventListener('click', () => {
       const answers = selects.map(s => s.value);
-      if (answers.every(a => a)) { selects.forEach(s => s.disabled = true); submitBtn.disabled = true; onSubmit(answers); }
+      if (answers.every(a => a)) {
+        selects.forEach(s => (s.disabled = true));
+        submitBtn.style.display = 'none';
+        onSubmit(answers);
+      }
     });
     area.appendChild(submitBtn);
   }
@@ -867,22 +815,21 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
 function _renderQuizReport(host: HTMLElement): void {
   const score = state.quizAnswers.filter(a => a.correct).length;
   const total = state.quizAnswers.length;
-  const pct = total ? Math.round((score / total) * 100) : 0;
 
-  const scoreEl = document.createElement('div');
-  scoreEl.style.cssText = 'text-align:center;padding:16px 0 12px';
-  scoreEl.innerHTML = `<div style="font-size:36px;font-weight:800;color:${pct >= 60 ? 'var(--nm-accent)' : 'var(--nm-danger)'};">${pct}%</div><div style="font-size:13px;color:var(--nm-fg-muted);margin-top:4px">${score} / ${total} correct</div><div style="font-size:12px;color:var(--nm-fg-subtle);margin-top:2px">+${score * 2 + (score === total ? 10 : 0)} XP earned</div>`;
-  host.appendChild(scoreEl);
+  const done = document.createElement('div');
+  done.style.cssText =
+    'display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px 12px;text-align:center';
+  const msg =
+    score === total
+      ? 'Perfect score — this section is yours.'
+      : score >= Math.ceil(total * 0.6)
+      ? 'Solid. Review the misses, then try a fresh quiz.'
+      : 'Worth re-reading the section before retrying.';
+  done.innerHTML =
+    `<span style="font-size:26px;font-weight:600;color:var(--accent-text);font-family:var(--font-mono)">${score} / ${total}</span>` +
+    `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${msg}<br/>+${score * 2 + (score === total ? 10 : 0)} XP earned</span>`;
 
-  state.quizAnswers.forEach((rec, i) => {
-    const item = document.createElement('div');
-    item.style.cssText = `margin-bottom:10px;padding:10px 12px;border-radius:9px;border-left:4px solid ${rec.correct ? 'var(--nm-accent)' : 'var(--nm-danger)'};background:${rec.correct ? '#f0fdf4' : '#fff1f1'};font-size:12.5px;line-height:1.45`;
-    item.innerHTML = `<div style="font-weight:700;color:var(--nm-fg-strong);margin-bottom:3px">Q${i + 1}: ${rec.question.question.substring(0, 80)}${rec.question.question.length > 80 ? '…' : ''}</div><div style="color:${rec.correct ? 'var(--nm-accent)' : 'var(--nm-danger)'};">${rec.correct ? '✓ Correct' : '✗ Wrong'}</div>`;
-    host.appendChild(item);
-  });
-
-  const retryBtn = _btn('🔄 New quiz', 'ghost');
-  retryBtn.style.cssText += ';width:100%;margin-top:8px';
+  const retryBtn = _btn('Try a new quiz', 'secondary');
   retryBtn.addEventListener('click', () => {
     state.quizQuestions = null;
     state.quizAnswers = [];
@@ -891,7 +838,8 @@ function _renderQuizReport(host: HTMLElement): void {
     host.innerHTML = '';
     _renderQuizTab(host);
   });
-  host.appendChild(retryBtn);
+  done.appendChild(retryBtn);
+  host.appendChild(done);
 }
 
 // ── Flashcards tab ─────────────────────────────────────────────
@@ -909,19 +857,34 @@ function _renderFlashcardsTab(host: HTMLElement): void {
   const viewCards = state.fcViewMode === 'section' ? secCards
     : state.fcViewMode === 'due' ? dueCards : allCards;
 
-  // View mode toggle
+  // Filter segmented (prototype: inset track, white active thumb)
   if (!state.fcStudying) {
-    const toggleRow = document.createElement('div');
-    toggleRow.style.cssText = 'display:flex;border:1.5px solid var(--nm-border);border-radius:9px;overflow:hidden;margin-bottom:12px';
-    ([['section', `Section (${secCards.length})`], ['due', `Due (${dueCards.length})`], ['all', `All (${allCards.length})`]] as const).forEach(([mode, label]) => {
-      const b = document.createElement('button');
+    const track = document.createElement('div');
+    track.style.cssText =
+      'display:flex;gap:2px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:3px;margin-bottom:12px';
+    (
+      [
+        ['section', `This section (${secCards.length})`],
+        ['due', `Due (${dueCards.length})`],
+        ['all', `All (${allCards.length})`]
+      ] as const
+    ).forEach(([mode, label]) => {
+      const b = document.createElement('span');
       b.textContent = label;
       const on = state.fcViewMode === mode;
-      b.style.cssText = `flex:1;padding:7px 4px;font-size:11.5px;font-weight:${on ? '700' : '500'};border:none;cursor:pointer;font-family:inherit;background:${on ? 'var(--nm-primary)' : '#fff'};color:${on ? '#fff' : 'var(--nm-fg-muted)'};transition:all 120ms`;
-      b.addEventListener('click', () => { state.fcViewMode = mode; host.innerHTML = ''; _renderFlashcardsTab(host); });
-      toggleRow.appendChild(b);
+      b.style.cssText =
+        'flex:1;text-align:center;padding:5px 0;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;white-space:nowrap;' +
+        (on
+          ? 'background:var(--bg-panel);color:var(--text-primary);box-shadow:0 1px 2px rgba(0,0,0,0.14), 0 0 0 1px var(--border-default)'
+          : 'color:var(--text-tertiary)');
+      b.addEventListener('click', () => {
+        state.fcViewMode = mode;
+        host.innerHTML = '';
+        _renderFlashcardsTab(host);
+      });
+      track.appendChild(b);
     });
-    host.appendChild(toggleRow);
+    host.appendChild(track);
   }
 
   if (state.fcStudying && state.fcStudyCards.length > 0) {
@@ -930,26 +893,62 @@ function _renderFlashcardsTab(host: HTMLElement): void {
   }
 
   if (viewCards.length === 0) {
-    // Generate button
-    const h = _label('No flashcards yet');
-    host.appendChild(h);
-    const genBtn = _btn('✨ Generate flashcards', 'accent');
-    genBtn.style.cssText += ';width:100%';
+    const empty = document.createElement('div');
+    empty.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px 12px;text-align:center';
+    const msg =
+      state.fcViewMode === 'due'
+        ? allCards.length
+          ? 'Nothing due right now — your cards are resting.'
+          : 'No cards yet — generate some from a section first.'
+        : `No flashcards for this ${state.fcViewMode === 'all' ? 'document' : 'section'} yet. Generate them from the key terms.`;
+    empty.innerHTML =
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2"></rect><path d="M22 4v12"></path></svg>' +
+      `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${msg}</span>`;
+    const genBtn = _btn('Generate cards', 'primary');
     genBtn.disabled = !isAiReady();
     genBtn.addEventListener('click', () => _generateFlashcards(host));
-    host.appendChild(genBtn);
+    empty.appendChild(genBtn);
     if (!isAiReady()) {
-      const w = document.createElement('div');
-      w.style.cssText = 'font-size:11.5px;color:var(--nm-fg-muted);margin-top:8px';
-      w.textContent = '⚠️ Set GEMINI_API_KEY to generate flashcards.';
-      host.appendChild(w);
+      const w = document.createElement('span');
+      w.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
+      w.textContent = 'Set GEMINI_API_KEY to generate flashcards.';
+      empty.appendChild(w);
     }
+    host.appendChild(empty);
     return;
   }
 
-  // Show card list + study button
-  const studyBtn = _btn(`▶ Study ${viewCards.length} cards`, 'accent');
-  studyBtn.style.cssText += ';width:100%;margin-bottom:12px';
+  // Card list rows (prototype)
+  const listWrap = document.createElement('div');
+  listWrap.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+  viewCards.forEach(c => {
+    const lvl =
+      c.review_state === 'mastered'
+        ? 'mastered'
+        : c.repetitions > 0
+        ? `lvl ${Math.min(c.repetitions, 4)}`
+        : 'new';
+    const lvlStyle =
+      c.review_state === 'mastered'
+        ? 'background:var(--green-bg);color:var(--green-500)'
+        : c.repetitions > 0
+        ? 'background:var(--accent-subtle-bg);color:var(--accent-text)'
+        : 'background:var(--gray-800);color:var(--text-quaternary)';
+    const item = document.createElement('div');
+    item.style.cssText =
+      'display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:7px';
+    item.innerHTML =
+      `<span style="font-size:12.5px;font-weight:600;font-family:var(--font-mono);flex:0 0 auto;color:var(--text-primary);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.front}</span>` +
+      `<span style="font-size:11.5px;color:var(--text-quaternary);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.back}</span>` +
+      `<span style="flex:0 0 auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;${lvlStyle}">${lvl}</span>`;
+    listWrap.appendChild(item);
+  });
+  host.appendChild(listWrap);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:4px';
+  const studyBtn = _btn(`Study ${viewCards.length} cards`, 'primary');
   studyBtn.addEventListener('click', () => {
     state.fcStudyCards = [...viewCards].sort(() => Math.random() - 0.5);
     state.fcIdx = 0;
@@ -958,106 +957,101 @@ function _renderFlashcardsTab(host: HTMLElement): void {
     host.innerHTML = '';
     _renderFlashcardsTab(host);
   });
-  host.appendChild(studyBtn);
-
-  viewCards.slice(0, 5).forEach(c => {
-    const item = document.createElement('div');
-    item.style.cssText = 'border:1px solid var(--nm-border);border-radius:9px;padding:10px 12px;margin-bottom:8px;font-size:13px';
-    const badge = document.createElement('span');
-    badge.style.cssText = `font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;margin-bottom:5px;display:inline-block;background:${_cardTypeBg(c.card_type)};color:${_cardTypeColor(c.card_type)}`;
-    badge.textContent = c.card_type.replace('_', ' ');
-    const front = document.createElement('div');
-    front.style.cssText = 'font-weight:600;color:var(--nm-fg-strong);margin-top:3px';
-    front.textContent = c.front;
-    item.appendChild(badge);
-    item.appendChild(front);
-    host.appendChild(item);
-  });
-
-  if (viewCards.length > 5) {
-    const more = document.createElement('div');
-    more.style.cssText = 'font-size:12px;color:var(--nm-fg-subtle);text-align:center;margin-top:4px';
-    more.textContent = `+${viewCards.length - 5} more cards`;
-    host.appendChild(more);
-  }
-
-  const regenBtn = _btn('↺ Regenerate', 'ghost');
-  regenBtn.style.cssText += ';width:100%;margin-top:10px;font-size:12px';
+  const regenBtn = _btn('Generate more', 'ghost');
   regenBtn.disabled = !isAiReady();
   regenBtn.addEventListener('click', () => _generateFlashcards(host));
-  host.appendChild(regenBtn);
+  btnRow.appendChild(studyBtn);
+  btnRow.appendChild(regenBtn);
+  host.appendChild(btnRow);
 }
 
 function _renderStudyMode(host: HTMLElement): void {
   const card = state.fcStudyCards[state.fcIdx];
   const total = state.fcStudyCards.length;
 
-  const progress = document.createElement('div');
-  progress.style.cssText = 'font-size:11px;color:var(--nm-fg-subtle);text-align:center;margin-bottom:10px;font-family:var(--nm-font-mono)';
-  progress.textContent = `${state.fcIdx + 1} / ${total}`;
-  host.appendChild(progress);
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+
+  const progress = document.createElement('span');
+  progress.style.cssText =
+    'font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono)';
+  progress.textContent = `Card ${state.fcIdx + 1} / ${total}`;
+  wrap.appendChild(progress);
 
   const cardEl = document.createElement('div');
   cardEl.style.cssText = [
-    'background:var(--nm-bg-elev-2);border:1.5px solid var(--nm-border);border-radius:14px',
-    'padding:24px 18px;text-align:center;cursor:pointer;min-height:130px',
-    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px',
-    'transition:all 160ms ease;box-shadow:0 2px 12px rgba(0,0,0,0.07);margin-bottom:14px'
+    'min-height:130px;background:var(--surface-card);border:1px solid var(--border-strong);border-radius:10px',
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:18px',
+    'cursor:pointer;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,0.06);transition:border-color var(--dur-fast) var(--ease-out)'
   ].join(';');
+  cardEl.addEventListener('mouseenter', () => {
+    cardEl.style.borderColor = 'var(--accent)';
+  });
+  cardEl.addEventListener('mouseleave', () => {
+    cardEl.style.borderColor = 'var(--border-strong)';
+  });
 
-  const sideLbl = document.createElement('div');
-  sideLbl.style.cssText = 'font-size:10px;font-weight:700;color:var(--nm-fg-subtle);text-transform:uppercase;letter-spacing:0.06em';
-  sideLbl.textContent = state.fcFlipped ? 'ANSWER' : 'TERM / QUESTION';
+  const sideLbl = document.createElement('span');
+  sideLbl.style.cssText =
+    'font-size:10px;font-weight:600;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.08em';
+  sideLbl.textContent = state.fcFlipped ? 'Answer' : 'Term';
 
-  const typeBadge = document.createElement('div');
-  typeBadge.style.cssText = `font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${_cardTypeBg(card.card_type)};color:${_cardTypeColor(card.card_type)}`;
-  typeBadge.textContent = card.card_type.replace('_', ' ');
-
-  const cardText = document.createElement('div');
-  cardText.style.cssText = 'font-size:15px;font-weight:600;color:var(--nm-fg-strong);line-height:1.5;max-width:260px';
+  const cardText = document.createElement('span');
+  cardText.style.cssText = state.fcFlipped
+    ? 'font-size:13px;color:var(--text-secondary);line-height:1.55'
+    : 'font-size:17px;font-weight:600;font-family:var(--font-mono);color:var(--text-primary)';
   cardText.textContent = state.fcFlipped ? card.back : card.front;
 
-  const flipHint = document.createElement('div');
-  flipHint.style.cssText = 'font-size:11px;color:var(--nm-fg-subtle);margin-top:6px';
-  flipHint.textContent = state.fcFlipped ? '' : 'Click to reveal answer';
-
   cardEl.appendChild(sideLbl);
-  cardEl.appendChild(typeBadge);
   cardEl.appendChild(cardText);
-  cardEl.appendChild(flipHint);
+  if (!state.fcFlipped) {
+    const flipHint = document.createElement('span');
+    flipHint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+    flipHint.textContent = 'Click to flip';
+    cardEl.appendChild(flipHint);
+  }
   cardEl.addEventListener('click', () => {
     state.fcFlipped = !state.fcFlipped;
     host.innerHTML = '';
     _renderFlashcardsTab(host);
   });
-  host.appendChild(cardEl);
+  wrap.appendChild(cardEl);
 
   if (state.fcFlipped) {
-    // Rating buttons
     const ratingRow = document.createElement('div');
-    ratingRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:12px';
+    ratingRow.style.cssText =
+      'display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px';
     const ratings: Array<[CardRating, string, string]> = [
-      ['again', 'Again', '#fee2e2'],
-      ['good', 'Good', '#e0f2fe'],
-      ['easy', 'Easy', '#dcfce7'],
-      ['mastered', '⭐ Done', '#fef3c7']
+      ['again', 'Again', 'var(--red-400)'],
+      ['good', 'Good', 'var(--text-secondary)'],
+      ['easy', 'Easy', 'var(--brand-300)'],
+      ['mastered', 'Mastered', 'var(--green-400)']
     ];
-    ratings.forEach(([rating, label, bg]) => {
-      const rb = document.createElement('button');
-      rb.style.cssText = `padding:8px 4px;border-radius:8px;border:1.5px solid var(--nm-border);background:${bg};font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:filter 120ms`;
+    ratings.forEach(([rating, label, color]) => {
+      const rb = document.createElement('div');
+      rb.style.cssText = `text-align:center;padding:7px 0;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--border-strong);color:${color};transition:background-color var(--dur-fast) var(--ease-out)`;
       rb.textContent = label;
-      rb.addEventListener('mouseenter', () => { rb.style.filter = 'brightness(0.95)'; });
-      rb.addEventListener('mouseleave', () => { rb.style.filter = 'none'; });
+      rb.addEventListener('mouseenter', () => {
+        rb.style.background = 'var(--alpha-6)';
+      });
+      rb.addEventListener('mouseleave', () => {
+        rb.style.background = 'transparent';
+      });
       rb.addEventListener('click', () => _rateCard(card, rating, host));
       ratingRow.appendChild(rb);
     });
-    host.appendChild(ratingRow);
+    wrap.appendChild(ratingRow);
   }
 
-  const exitBtn = _btn('✕ Exit study', 'ghost');
-  exitBtn.style.cssText += ';width:100%;font-size:12px';
-  exitBtn.addEventListener('click', () => { state.fcStudying = false; state.fcFlipped = false; host.innerHTML = ''; _renderFlashcardsTab(host); });
-  host.appendChild(exitBtn);
+  const exitBtn = _btn('Exit study', 'ghost');
+  exitBtn.addEventListener('click', () => {
+    state.fcStudying = false;
+    state.fcFlipped = false;
+    host.innerHTML = '';
+    _renderFlashcardsTab(host);
+  });
+  wrap.appendChild(exitBtn);
+  host.appendChild(wrap);
 }
 
 async function _rateCard(card: IFlashcard, rating: CardRating, host: HTMLElement): Promise<void> {
@@ -1078,15 +1072,20 @@ async function _rateCard(card: IFlashcard, rating: CardRating, host: HTMLElement
   } else {
     state.fcStudying = false;
     host.innerHTML = '';
-    // Session complete toast
+    // Session complete (prototype)
     const done = document.createElement('div');
-    done.style.cssText = 'text-align:center;padding:20px 0';
-    done.innerHTML = '<div style="font-size:36px;margin-bottom:8px">🎉</div><div style="font-size:15px;font-weight:700;color:var(--nm-fg-strong)">Session complete!</div><div style="font-size:13px;color:var(--nm-fg-muted);margin-top:4px">Great work reviewing these cards.</div>';
+    done.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px 12px;text-align:center';
+    done.innerHTML =
+      '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">Session finished</span>' +
+      `<span style="font-size:12.5px;color:var(--text-tertiary)">${state.fcStudyCards.length} reviews · spaced repetition schedules the next round.</span>`;
+    const backBtn = _btn('Back to cards', 'secondary');
+    backBtn.addEventListener('click', () => {
+      host.innerHTML = '';
+      _renderFlashcardsTab(host);
+    });
+    done.appendChild(backBtn);
     host.appendChild(done);
-    const backBtn = _btn('← Back to cards', 'ghost');
-    backBtn.style.cssText += ';width:100%;margin-top:14px';
-    backBtn.addEventListener('click', () => { host.innerHTML = ''; _renderFlashcardsTab(host); });
-    host.appendChild(backBtn);
   }
 }
 
@@ -1157,80 +1156,49 @@ function _toggleUnderstood(): void {
   _render();
 }
 
-async function _saveNote(sectionIndex: number, val: string): Promise<void> {
-  state.notes[sectionIndex] = val;
-  if (state.docId && isConnected()) {
-    const sec = state.sections[sectionIndex];
-    await upsertSectionNote(state.docId, sectionIndex, val, sec?.title).catch(() => null);
-  }
-}
-
-function _progressRing(size: number, pct: number, color: string): SVGSVGElement {
-  const r = (size - 4) / 2;
-  const circ = 2 * Math.PI * r;
-  const dashOffset = circ - (pct / 100) * circ;
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', String(size));
-  svg.setAttribute('height', String(size));
-  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
-  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  bg.setAttribute('cx', String(size / 2));
-  bg.setAttribute('cy', String(size / 2));
-  bg.setAttribute('r', String(r));
-  bg.setAttribute('fill', 'none');
-  bg.setAttribute('stroke', '#e5e5e5');
-  bg.setAttribute('stroke-width', '3');
-  const fg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  fg.setAttribute('cx', String(size / 2));
-  fg.setAttribute('cy', String(size / 2));
-  fg.setAttribute('r', String(r));
-  fg.setAttribute('fill', 'none');
-  fg.setAttribute('stroke', color);
-  fg.setAttribute('stroke-width', '3');
-  fg.setAttribute('stroke-dasharray', String(circ));
-  fg.setAttribute('stroke-dashoffset', String(dashOffset));
-  fg.setAttribute('stroke-linecap', 'round');
-  fg.setAttribute('transform', `rotate(-90 ${size / 2} ${size / 2})`);
-  svg.appendChild(bg);
-  svg.appendChild(fg);
-  return svg;
-}
-
-function _label(text: string): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText = 'font-size:13px;font-weight:700;color:var(--nm-fg-strong);margin-bottom:10px';
-  el.textContent = text;
-  return el;
-}
-
-function _btn(label: string, variant: 'primary' | 'accent' | 'ghost'): HTMLButtonElement {
+/** Small (28px) DS button — reader panels use the sm size throughout. */
+function _btn(
+  label: string,
+  variant: 'primary' | 'accent' | 'secondary' | 'ghost'
+): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
+  const base =
+    'display:inline-flex;align-items:center;justify-content:center;gap:6px;height:var(--control-sm);padding:0 10px;box-sizing:border-box;font-family:var(--font-sans);font-size:12px;font-weight:500;line-height:1;letter-spacing:-0.01em;border-radius:var(--radius-control);border:1px solid transparent;cursor:pointer;user-select:none;white-space:nowrap;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)';
   const styles: Record<string, string> = {
-    primary: 'background:var(--nm-fg-strong);color:#fff;border:none',
-    accent: 'background:var(--nm-primary);color:#fff;border:none',
-    ghost: 'background:#fff;color:var(--nm-fg-muted);border:1px solid var(--nm-border)'
+    primary:
+      'background:var(--accent);color:var(--text-onbrand);box-shadow:var(--shadow-brand)',
+    accent:
+      'background:var(--accent);color:var(--text-onbrand);box-shadow:var(--shadow-brand)',
+    secondary:
+      'background:var(--alpha-6);color:var(--text-primary);border-color:var(--border-default)',
+    ghost: 'background:transparent;color:var(--text-secondary)'
   };
-  b.style.cssText = `padding:8px 16px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:filter 120ms;${styles[variant]}`;
-  b.addEventListener('mouseenter', () => { b.style.filter = 'brightness(0.92)'; });
-  b.addEventListener('mouseleave', () => { b.style.filter = 'none'; });
+  b.style.cssText = `${base};${styles[variant]}`;
+  b.addEventListener('mouseenter', () => {
+    if (b.disabled) return;
+    if (variant === 'primary' || variant === 'accent') {
+      b.style.background = 'var(--accent-hover)';
+    } else if (variant === 'secondary') {
+      b.style.background = 'var(--alpha-10)';
+      b.style.borderColor = 'var(--border-strong)';
+    } else {
+      b.style.background = 'var(--alpha-6)';
+      b.style.color = 'var(--text-primary)';
+    }
+  });
+  b.addEventListener('mouseleave', () => {
+    if (variant === 'primary' || variant === 'accent') {
+      b.style.background = 'var(--accent)';
+    } else if (variant === 'secondary') {
+      b.style.background = 'var(--alpha-6)';
+      b.style.borderColor = 'var(--border-default)';
+    } else {
+      b.style.background = 'transparent';
+      b.style.color = 'var(--text-secondary)';
+    }
+  });
   return b;
-}
-
-function _navBtn(label: string): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.style.cssText = 'width:28px;height:28px;border:1px solid var(--nm-border);border-radius:6px;background:#fff;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;color:var(--nm-fg)';
-  return b;
-}
-
-function _cardTypeBg(type: string): string {
-  const m: Record<string, string> = { term_definition: '#dbeafe', concept_example: '#dcfce7', fill_blank: '#fef3c7', key_claim: '#f3e8ff', relationship: '#ffe4e6' };
-  return m[type] ?? '#f4f4f5';
-}
-function _cardTypeColor(type: string): string {
-  const m: Record<string, string> = { term_definition: '#1d4ed8', concept_example: '#166534', fill_blank: '#92400e', key_claim: '#7e22ce', relationship: '#9f1239' };
-  return m[type] ?? '#52525b';
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────
@@ -1240,13 +1208,13 @@ function _installKeyboard(): void {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     if (['input', 'textarea', 'select'].includes(tag)) return;
     if (!state.doc) return;
-    if (e.key === 'n' || e.key === 'N' || e.key === 'ArrowRight') {
+    if (e.key === 'ArrowRight') {
       e.preventDefault();
       const sec = state.sections[state.currentSection];
       if (sec && state.currentPage < sec.pages.length - 1) state.currentPage++;
       else if (state.currentSection < state.sections.length - 1) { state.currentSection++; state.currentPage = 0; }
       _render();
-    } else if (e.key === 'p' || e.key === 'P' || e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
       if (state.currentPage > 0) state.currentPage--;
       else if (state.currentSection > 0) { state.currentSection--; state.currentPage = state.sections[state.currentSection].pages.length - 1; }
@@ -1291,14 +1259,31 @@ let _kbHandler: ((e: KeyboardEvent) => void) | null = null;
 
 function _showShortcuts(): void {
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)';
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:2000;background:var(--surface-overlay);display:flex;align-items:center;justify-content:center';
   const box = document.createElement('div');
-  box.style.cssText = 'background:#fff;border-radius:16px;padding:28px 32px;max-width:380px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.2)';
-  box.innerHTML = `<div style="font-size:17px;font-weight:800;color:var(--nm-fg-strong);margin-bottom:16px">⌨️ Keyboard shortcuts</div>
-${[['N / →', 'Next page'], ['P / ←', 'Previous page'], ['U', 'Mark section understood'], ['Q', 'Open quiz tab'], ['F', 'Open flashcards tab'], ['Space / Enter', 'Flip flashcard'], ['1 / 2 / 3', 'Rate card: Again / Good / Easy'], ['?', 'Show shortcuts'], ['Esc', 'Exit fullscreen']].map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--nm-border);font-size:13px"><code style="background:#f4f4f5;border-radius:5px;padding:2px 7px;font-family:var(--nm-font-mono);font-size:12px">${k}</code><span style="color:var(--nm-fg-muted)">${v}</span></div>`).join('')}
-<button id="close-shortcuts" style="margin-top:18px;width:100%;padding:9px;border:none;background:var(--nm-fg-strong);color:#fff;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Close</button>`;
+  box.style.cssText =
+    'width:320px;background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:12px;box-shadow:0 16px 48px rgba(0,0,0,0.14);animation:nm-rise 0.15s ease-out both';
+  const rows = [
+    ['← →', 'Previous / next page'],
+    ['U', "Toggle 'understood' for this section"],
+    ['Q', 'Quiz tab'],
+    ['F', 'Flashcards tab'],
+    ['Space', 'Flip flashcard'],
+    ['1 / 2 / 3', 'Rate card: Again / Good / Easy'],
+    ['Esc', 'Close this / back to library']
+  ];
+  box.innerHTML =
+    '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">Keyboard shortcuts</span>' +
+    rows
+      .map(
+        ([k, v]) =>
+          `<div style="display:flex;align-items:center;gap:10px"><span style="flex:0 0 64px;font-size:11.5px;font-family:var(--font-mono);color:var(--text-primary);background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:5px;padding:2px 8px;text-align:center">${k}</span><span style="font-size:12.5px;color:var(--text-tertiary)">${v}</span></div>`
+      )
+      .join('');
   overlay.appendChild(box);
   document.body.appendChild(overlay);
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-  box.querySelector('#close-shortcuts')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.remove();
+  });
 }

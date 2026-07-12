@@ -91,7 +91,7 @@ export class NotebookMindPanel extends Widget {
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      background: '#F9FAFB',
+      background: 'var(--nm-bg-elev-2)',
       fontFamily: 'system-ui, -apple-system, sans-serif',
       minWidth: '280px',
       overflow: 'hidden'
@@ -100,7 +100,7 @@ export class NotebookMindPanel extends Widget {
     // ── Header ──────────────────────────────────────────────────────────────
     const header = document.createElement('div');
     header.style.cssText = [
-      'background:linear-gradient(135deg,#7C3AED 0%,#5B21B6 100%)',
+      'background:linear-gradient(135deg,var(--nm-primary) 0%,var(--nm-primary-hover) 100%)',
       'padding:14px 16px;display:flex;align-items:center',
       'justify-content:space-between;flex-shrink:0'
     ].join(';');
@@ -124,14 +124,14 @@ export class NotebookMindPanel extends Widget {
     const errorBanner = document.createElement('div');
     errorBanner.id = 'nm-error-banner';
     errorBanner.style.cssText = [
-      'background:#FEE2E2;border-bottom:1px solid #FECACA',
-      'padding:10px 16px;font-size:12px;color:#991B1B;display:none;line-height:1.55'
+      'background:var(--nm-danger-soft);border-bottom:1px solid var(--nm-danger-soft)',
+      'padding:10px 16px;font-size:12px;color:var(--nm-error-text);display:none;line-height:1.55'
     ].join(';');
 
     // ── Tab bar ──────────────────────────────────────────────────────────────
     const tabBar = document.createElement('div');
     tabBar.style.cssText = [
-      'display:flex;background:#FFFFFF;border-bottom:2px solid #E5E7EB',
+      'display:flex;background:#FFFFFF;border-bottom:2px solid var(--nm-border)',
       'flex-shrink:0;overflow-x:auto'
     ].join(';');
 
@@ -140,7 +140,7 @@ export class NotebookMindPanel extends Widget {
       btn.textContent = tab.label;
       btn.style.cssText = [
         'flex:1;min-width:0;padding:10px 2px;border:none;background:transparent',
-        'font-size:11px;cursor:pointer;font-weight:500;color:#6B7280',
+        'font-size:11px;cursor:pointer;font-weight:500;color:var(--nm-fg-muted)',
         'border-bottom:2px solid transparent;margin-bottom:-2px',
         'transition:all 0.18s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'
       ].join(';');
@@ -174,10 +174,10 @@ export class NotebookMindPanel extends Widget {
 
     this._tabBtns.forEach((btn, tabId) => {
       const active = tabId === id;
-      btn.style.color = active ? '#7C3AED' : '#6B7280';
-      btn.style.borderBottomColor = active ? '#7C3AED' : 'transparent';
+      btn.style.color = active ? 'var(--nm-primary)' : 'var(--nm-fg-muted)';
+      btn.style.borderBottomColor = active ? 'var(--nm-primary)' : 'transparent';
       btn.style.fontWeight = active ? '700' : '500';
-      btn.style.background = active ? '#FAFAFF' : 'transparent';
+      btn.style.background = active ? 'var(--nm-accent-soft)' : 'transparent';
     });
 
     this._tabContents.forEach((div, tabId) => {
@@ -211,12 +211,12 @@ export class NotebookMindPanel extends Widget {
     // Total points
     const ptSection = document.createElement('div');
     ptSection.style.cssText =
-      'text-align:center;padding:20px 0 24px;border-bottom:1px solid #F3F4F6;margin-bottom:20px';
+      'text-align:center;padding:20px 0 24px;border-bottom:1px solid var(--nm-bg-elev-2);margin-bottom:20px';
     const ptNum = document.createElement('div');
-    ptNum.style.cssText = 'font-size:52px;font-weight:800;color:#7C3AED;line-height:1';
+    ptNum.style.cssText = 'font-size:52px;font-weight:800;color:var(--nm-primary);line-height:1';
     ptNum.textContent = String(pointsEngine.total);
     const ptLabel = document.createElement('div');
-    ptLabel.style.cssText = 'font-size:13px;color:#6B7280;margin-top:6px;font-weight:500';
+    ptLabel.style.cssText = 'font-size:13px;color:var(--nm-fg-muted);margin-top:6px;font-weight:500';
     ptLabel.textContent = 'Total Points Earned';
     ptSection.appendChild(ptNum);
     ptSection.appendChild(ptLabel);
@@ -229,14 +229,14 @@ export class NotebookMindPanel extends Widget {
     const progSection = document.createElement('div');
     progSection.style.cssText = 'margin-bottom:22px';
     const progLabel = document.createElement('div');
-    progLabel.style.cssText = 'font-size:13px;color:#6B7280;margin-bottom:8px;font-weight:500';
+    progLabel.style.cssText = 'font-size:13px;color:var(--nm-fg-muted);margin-bottom:8px;font-weight:500';
     progLabel.textContent = `${mastered} of ${totalCells} cells mastered`;
     const progTrack = document.createElement('div');
     progTrack.style.cssText =
-      'background:#E5E7EB;border-radius:8px;height:10px;overflow:hidden';
+      'background:var(--nm-border);border-radius:8px;height:10px;overflow:hidden';
     const progFill = document.createElement('div');
     progFill.style.cssText = [
-      `width:${pct}%;height:100%;background:linear-gradient(90deg,#7C3AED,#10B981)`,
+      `width:${pct}%;height:100%;background:linear-gradient(90deg,var(--nm-primary),var(--nm-success))`,
       'border-radius:8px;transition:width 0.6s ease'
     ].join(';');
     progTrack.appendChild(progFill);
@@ -248,7 +248,7 @@ export class NotebookMindPanel extends Widget {
     heatSection.style.cssText = 'margin-bottom:22px';
     const heatTitle = document.createElement('div');
     heatTitle.style.cssText =
-      'font-size:13px;font-weight:600;color:#1F2937;margin-bottom:10px';
+      'font-size:13px;font-weight:600;color:var(--nm-fg);margin-bottom:10px';
     heatTitle.textContent = '🌡 Complexity Heatmap';
     heatSection.appendChild(heatTitle);
     renderHeatmap(heatSection, this._difficulties, idx => this._jumpToCell(idx));
@@ -258,17 +258,17 @@ export class NotebookMindPanel extends Widget {
     graphSection.style.cssText = 'margin-bottom:22px';
     const graphTitle = document.createElement('div');
     graphTitle.style.cssText =
-      'font-size:13px;font-weight:600;color:#1F2937;margin-bottom:10px';
+      'font-size:13px;font-weight:600;color:var(--nm-fg);margin-bottom:10px';
     graphTitle.textContent = '🔗 Cell Dependency Graph';
     const graphBtn = document.createElement('button');
     graphBtn.textContent = 'Generate Dependency Graph';
     graphBtn.style.cssText = [
-      'width:100%;padding:10px;background:#7C3AED;color:white;border:none',
+      'width:100%;padding:10px;background:var(--nm-primary);color:white;border:none',
       'border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px',
       'transition:background 0.2s'
     ].join(';');
-    graphBtn.addEventListener('mouseenter', () => { graphBtn.style.background = '#6D28D9'; });
-    graphBtn.addEventListener('mouseleave', () => { graphBtn.style.background = '#7C3AED'; });
+    graphBtn.addEventListener('mouseenter', () => { graphBtn.style.background = 'var(--nm-primary-hover)'; });
+    graphBtn.addEventListener('mouseleave', () => { graphBtn.style.background = 'var(--nm-primary)'; });
     const graphContainer = document.createElement('div');
     graphBtn.addEventListener('click', async () => {
       graphBtn.textContent = 'Generating...';
@@ -279,7 +279,7 @@ export class NotebookMindPanel extends Widget {
         await renderDependencyGraph(graphContainer, diagram);
       } catch {
         graphContainer.innerHTML =
-          '<div style="color:#EF4444;font-size:13px;padding:10px;background:#FEE2E2;border-radius:8px">Failed to generate graph.</div>';
+          '<div style="color:var(--nm-danger);font-size:13px;padding:10px;background:var(--nm-danger-soft);border-radius:8px">Failed to generate graph.</div>';
       } finally {
         graphBtn.textContent = 'Generate Dependency Graph';
         graphBtn.disabled = false;
@@ -293,22 +293,22 @@ export class NotebookMindPanel extends Widget {
     const abbrSection = document.createElement('div');
     const abbrTitle = document.createElement('div');
     abbrTitle.style.cssText =
-      'font-size:13px;font-weight:600;color:#1F2937;margin-bottom:10px';
+      'font-size:13px;font-weight:600;color:var(--nm-fg);margin-bottom:10px';
     abbrTitle.textContent = '🔤 Import Aliases';
     const abbrBtn = document.createElement('button');
     abbrBtn.textContent = 'Detect Abbreviations';
     abbrBtn.style.cssText = [
-      'width:100%;padding:10px;background:#FFFFFF;color:#7C3AED',
-      'border:1.5px solid #7C3AED;border-radius:8px;font-size:13px',
+      'width:100%;padding:10px;background:#FFFFFF;color:var(--nm-primary)',
+      'border:1.5px solid var(--nm-primary);border-radius:8px;font-size:13px',
       'font-weight:600;cursor:pointer;margin-bottom:10px;transition:background 0.2s'
     ].join(';');
-    abbrBtn.addEventListener('mouseenter', () => { abbrBtn.style.background = '#EDE9FE'; });
+    abbrBtn.addEventListener('mouseenter', () => { abbrBtn.style.background = 'var(--nm-accent-soft)'; });
     abbrBtn.addEventListener('mouseleave', () => { abbrBtn.style.background = '#FFFFFF'; });
     const abbrContainer = document.createElement('div');
     abbrBtn.addEventListener('click', async () => {
       if (!this._cellSource.trim()) {
         abbrContainer.innerHTML =
-          '<div style="color:#6B7280;font-size:13px">Select a cell first.</div>';
+          '<div style="color:var(--nm-fg-muted);font-size:13px">Select a cell first.</div>';
         return;
       }
       abbrBtn.textContent = 'Detecting...';
@@ -318,7 +318,7 @@ export class NotebookMindPanel extends Widget {
         renderAbbreviations(abbrContainer, abbrs);
       } catch {
         abbrContainer.innerHTML =
-          '<div style="color:#EF4444;font-size:13px">Failed to detect abbreviations.</div>';
+          '<div style="color:var(--nm-danger);font-size:13px">Failed to detect abbreviations.</div>';
       } finally {
         abbrBtn.textContent = 'Detect Abbreviations';
         abbrBtn.disabled = false;

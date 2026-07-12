@@ -122,14 +122,14 @@ export function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
 
   // White content slides
   el.style.background = '#ffffff';
-  el.style.border = '1px solid #e7e5e0';
+  el.style.border = '1px solid var(--nm-border)';
   const inner = document.createElement('div');
 
   if (s.kind === 'bullets') {
     inner.style.cssText = 'position:absolute;inset:0;padding:7% 8%';
     const t = document.createElement('div');
     t.style.cssText =
-      'color:#0a0a0a;font-size:clamp(22px,4vw,40px);font-weight:800;letter-spacing:-0.02em;margin-bottom:6%';
+      'color:var(--nm-fg-strong);font-size:clamp(22px,4vw,40px);font-weight:800;letter-spacing:-0.02em;margin-bottom:6%';
     t.textContent = s.title ?? '';
     inner.appendChild(t);
     (s.bullets ?? []).forEach(b => {
@@ -140,7 +140,7 @@ export function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
       sq.style.cssText = `width:clamp(8px,1vw,12px);height:clamp(8px,1vw,12px);background:${GREEN};flex-shrink:0;margin-top:0.55em`;
       const txt = document.createElement('span');
       txt.style.cssText =
-        'color:#18181b;font-size:clamp(15px,2.4vw,26px);line-height:1.3';
+        'color:var(--nm-fg);font-size:clamp(15px,2.4vw,26px);line-height:1.3';
       txt.textContent = b;
       row.appendChild(sq);
       row.appendChild(txt);
@@ -152,7 +152,7 @@ export function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
       'position:absolute;inset:0;padding:8% 9%;display:flex;flex-direction:column;justify-content:center';
     const t = document.createElement('div');
     t.style.cssText =
-      'color:#0a0a0a;font-size:clamp(22px,4vw,40px);font-weight:800;letter-spacing:-0.02em;text-align:center';
+      'color:var(--nm-fg-strong);font-size:clamp(22px,4vw,40px);font-weight:800;letter-spacing:-0.02em;text-align:center';
     const full = s.title ?? '';
     if (s.titleHi && full.includes(s.titleHi)) {
       const [pre, post] = full.split(s.titleHi);
@@ -169,7 +169,7 @@ export function renderSlide(s: ISlide, n: number, total: number): HTMLElement {
     if (s.text) {
       const body = document.createElement('div');
       body.style.cssText =
-        'color:#18181b;font-size:clamp(14px,2.2vw,24px);line-height:1.45;text-align:center;margin-top:4%;max-width:80%;align-self:center';
+        'color:var(--nm-fg);font-size:clamp(14px,2.2vw,24px);line-height:1.45;text-align:center;margin-top:4%;max-width:80%;align-self:center';
       body.textContent = s.text;
       inner.appendChild(body);
     }

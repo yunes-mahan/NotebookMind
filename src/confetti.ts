@@ -1,4 +1,4 @@
-const COLORS = ['#FE7030', '#515839', '#DEE5B9', '#B27B1F', '#6B4FCF', '#C6435D'];
+const COLORS = ['var(--nm-primary)', '#515839', '#DEE5B9', '#B27B1F', '#6B4FCF', '#C6435D'];
 
 function ensureStyle(): void {
   if (document.querySelector('#nm-burst-style')) {

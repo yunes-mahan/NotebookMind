@@ -35,28 +35,31 @@ function buildTheme(minLines: number, readOnly: boolean): ReturnType<typeof Edit
   return EditorView.theme(
     {
       '&': {
-        backgroundColor: 'var(--nm-code-bg)',
-        color: 'var(--nm-code-text)',
-        borderRadius: '12px',
-        border: '1px solid var(--nm-code-border)',
-        fontSize: '13px',
+        backgroundColor: 'var(--bg-base)',
+        color: 'var(--text-primary)',
+        borderRadius: '7px',
+        border: readOnly
+          ? '1px solid var(--border-subtle)'
+          : '1px solid var(--border-strong)',
+        fontSize: '12.5px',
         overflow: 'hidden'
       },
       '&.cm-focused': readOnly
         ? { outline: 'none' }
         : {
             outline: 'none',
-            borderColor: 'var(--nm-accent)',
-            boxShadow: '0 0 0 3px var(--nm-accent-light)'
+            borderColor: 'var(--accent)',
+            boxShadow: '0 0 0 3px var(--brand-glow)'
           },
-      '.cm-scroller': { fontFamily: 'var(--nm-font-mono)', lineHeight: '1.6' },
+      '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.7' },
       '.cm-content': contentRules,
       '.cm-gutters': {
-        backgroundColor: 'transparent',
-        color: 'var(--nm-text-faint)',
-        border: 'none'
+        backgroundColor: 'rgba(0,0,0,0.035)',
+        color: 'var(--text-quaternary)',
+        border: 'none',
+        borderRight: '1px solid var(--border-subtle)'
       },
-      '.cm-cursor': { borderLeftColor: 'var(--nm-accent)' }
+      '.cm-cursor': { borderLeftColor: 'var(--accent)' }
     },
     { dark: false }
   );

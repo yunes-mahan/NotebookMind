@@ -1,21 +1,10 @@
 import { NotebookMindApp } from './nbApp';
-import {
-  explainCell,
-  askAboutCell,
-  summarizeNotebook,
-  IChatTurn
-} from './gemini';
-import { button, infoBox, spinner, avatar } from './uiKit';
-import { makeCodeField } from './codeField';
+import { explainCell, askAboutCell, IChatTurn } from './gemini';
+import { button, infoBox, spinner, avatar, tabBar } from './uiKit';
 import { renderMarkdown } from './markdown';
 import { openSlides, renderSlide } from './slidesModal';
 import { deckForPdf } from './slidesData';
-import {
-  demoAssignment,
-  demoCellMeta,
-  demoCellSlides,
-  cellTitle
-} from './demoData';
+import { demoCellMeta, demoCellSlides, cellTitle } from './demoData';
 
 interface ICellResult {
   output: string;
@@ -24,10 +13,18 @@ interface ICellResult {
 
 type DetailTab = 'ai' | 'teacher' | 'student';
 
-// Session-scoped stores (persist while JupyterLab stays open).
-const summaryCache = new Map<string, string>();
-const studentNotesStore = new Map<string, string>();
+const CAPS =
+  'font-size:11px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600';
 
+// Session-scoped stores (persist while JupyterLab stays open).
+const studentNotesStore = new Map<string, string>();
+const sideNotesStore = new Map<string, string[]>();
+
+/**
+ * Explain mode — prototype layout. One card per cell (code · output band ·
+ * insight tabs), all three insight sources share one panel shell, and on wide
+ * screens sticky margin-note columns flank each card.
+ */
 export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   const doc = app.doc;
   if (!doc) {
@@ -37,31 +34,10 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   const cells = doc.cells;
   const docKey = doc.key;
 
-  let selected = 0;
-  let detailTab: DetailTab = 'ai';
   const results: ICellResult[] = cells.map(() => ({ output: '', images: [] }));
   const explanationCache = new Map<number, string>();
   const chatHistory = new Map<number, IChatTurn[]>();
-
-  // ── Top bar ───────────────────────────────────────────────────
-  const top = document.createElement('div');
-  top.style.cssText = 'margin-bottom:18px';
-  const back = button('← Notebooks', 'ghost');
-  back.style.marginBottom = '12px';
-  back.addEventListener('click', () => app.navigate('home'));
-  const h = document.createElement('div');
-  h.style.cssText =
-    'font-size:24px;font-weight:800;letter-spacing:-0.02em;color:var(--nm-text)';
-  h.textContent = doc.name;
-  const sub = document.createElement('div');
-  sub.style.cssText =
-    'font-size:14px;color:var(--nm-text-secondary);margin-top:4px';
-  sub.textContent =
-    'Explain mode — click a cell to read its explanation, teacher notes and add your own comments.';
-  top.appendChild(back);
-  top.appendChild(h);
-  top.appendChild(sub);
-  host.appendChild(top);
+  const tabState = new Map<number, DetailTab>();
 
   const stage = document.createElement('div');
   host.appendChild(stage);
@@ -70,467 +46,461 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
     return `${docKey}:${i}`;
   }
 
-  // ── Task overview (teacher-written; seeded or AI-generated) ───
-  function buildTaskCard(): void {
-    const card = document.createElement('div');
-    card.style.cssText = [
-      'background:var(--nm-accent-light);border:1px solid var(--nm-accent-border)',
-      'border-radius:var(--nm-radius-lg);padding:16px 18px;margin-bottom:20px'
-    ].join(';');
-    const label = document.createElement('div');
-    label.style.cssText =
-      'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--nm-accent-hover);margin-bottom:6px';
-    label.textContent = '👩‍🏫 Assignment';
-    const body = document.createElement('div');
-    body.style.cssText = 'font-size:14px;color:var(--nm-text);line-height:1.65';
-    card.appendChild(label);
-    card.appendChild(body);
-    stage.appendChild(card);
-
-    const seeded = demoAssignment(docKey);
-    if (seeded) {
-      body.textContent = seeded;
-      return;
-    }
-    const cached = summaryCache.get(docKey);
-    if (cached) {
-      body.textContent = cached;
-      return;
-    }
-    body.textContent = 'Generating assignment overview…';
-    body.style.color = 'var(--nm-text-muted)';
-    void summarizeNotebook(cells)
-      .then(text => {
-        summaryCache.set(docKey, text);
-        body.textContent = text;
-        body.style.color = 'var(--nm-text)';
-      })
-      .catch(() => {
-        body.textContent =
-          'Work through each cell and make sure you understand what it produces.';
-        body.style.color = 'var(--nm-text)';
-      });
-  }
-
-  // ── Split layout ──────────────────────────────────────────────
-  let rightCol!: HTMLElement;
-  const cellEls: HTMLElement[] = [];
-
-  function highlight(): void {
-    cellEls.forEach((el, i) => {
-      const on = i === selected;
-      el.style.borderColor = on ? 'var(--nm-accent)' : 'var(--nm-border)';
-      el.style.boxShadow = on ? 'var(--nm-shadow-md)' : 'var(--nm-shadow-xs)';
-    });
-  }
-
-  function buildSplit(): void {
+  // ── Build ─────────────────────────────────────────────────────
+  function build(): void {
     stage.innerHTML = '';
-    buildTaskCard();
-
-    const split = document.createElement('div');
-    split.style.cssText =
-      'display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap';
-    const leftCol = document.createElement('div');
-    leftCol.style.cssText = 'flex:1 1 380px;min-width:300px';
-    rightCol = document.createElement('div');
-    rightCol.style.cssText =
-      'flex:1 1 360px;min-width:300px;position:sticky;top:0';
-    split.appendChild(leftCol);
-    split.appendChild(rightCol);
-    stage.appendChild(split);
-
-    cellEls.length = 0;
-    cells.forEach((code, i) => {
-      leftCol.appendChild(makeCellCard(i, code));
-    });
-
-    highlight();
-    renderDetail();
+    const col = document.createElement('div');
+    col.style.cssText =
+      'width:100%;display:flex;flex-direction:column;gap:16px';
+    stage.appendChild(col);
+    const wide = window.innerWidth >= 1410;
+    cells.forEach((code, i) => col.appendChild(makeCellRow(i, code, wide)));
   }
 
+  /** Grid row: optional left margin-notes · card · optional right margin-notes. */
+  function makeCellRow(i: number, code: string, wide: boolean): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = wide
+      ? 'display:grid;grid-template-columns:160px minmax(0,780px) 160px;gap:12px;justify-content:center;align-items:start'
+      : 'display:grid;grid-template-columns:minmax(0,780px);gap:0;justify-content:center;align-items:start';
+    if (wide) row.appendChild(marginColumn(i, 'L'));
+    row.appendChild(makeCellCard(i, code));
+    if (wide) row.appendChild(marginColumn(i, 'R'));
+    return row;
+  }
+
+  // ── Sticky margin notes (prototype) ───────────────────────────
+  function marginColumn(i: number, side: 'L' | 'R'): HTMLElement {
+    const key = `${noteKey(i)}-${side}`;
+    const col = document.createElement('div');
+    col.style.cssText = [
+      'display:flex;flex-direction:column;gap:8px;position:sticky;top:16px;align-self:stretch;cursor:cell',
+      side === 'L' ? 'align-items:flex-end;padding-right:2px' : 'align-items:flex-start;padding-left:2px'
+    ].join(';');
+
+    const paint = (): void => {
+      col.innerHTML = '';
+      const notes = sideNotesStore.get(key) ?? [];
+      notes.forEach((text, ni) => {
+        const note = document.createElement('div');
+        note.style.cssText =
+          'width:152px;max-width:38vw;box-sizing:border-box;display:flex;flex-direction:column;gap:5px;padding:9px 10px;background:var(--yellow-bg);border:1px solid rgba(178,125,32,0.28);border-radius:8px;cursor:auto';
+        note.addEventListener('click', e => e.stopPropagation());
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;gap:6px';
+        head.innerHTML =
+          '<span style="font-size:9.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:var(--yellow-500)">Note</span><span style="flex:1"></span>';
+        const del = document.createElement('span');
+        del.textContent = '✕';
+        del.style.cssText =
+          'cursor:pointer;font-size:12px;color:var(--text-quaternary);line-height:1';
+        del.addEventListener('mouseenter', () => (del.style.color = 'var(--red-400)'));
+        del.addEventListener('mouseleave', () => (del.style.color = 'var(--text-quaternary)'));
+        del.addEventListener('click', e => {
+          e.stopPropagation();
+          const arr = (sideNotesStore.get(key) ?? []).filter((_, j) => j !== ni);
+          sideNotesStore.set(key, arr);
+          paint();
+        });
+        head.appendChild(del);
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.placeholder = 'Write a note…';
+        ta.style.cssText =
+          'width:100%;box-sizing:border-box;resize:vertical;min-height:52px;background:transparent;color:var(--text-primary);border:none;padding:0;font-family:var(--font-sans);font-size:12px;line-height:1.55;outline:none';
+        ta.addEventListener('input', () => {
+          const arr = (sideNotesStore.get(key) ?? []).slice();
+          arr[ni] = ta.value;
+          sideNotesStore.set(key, arr);
+        });
+        note.appendChild(head);
+        note.appendChild(ta);
+        col.appendChild(note);
+      });
+
+      const hint = document.createElement('span');
+      hint.style.cssText =
+        'display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:500;color:var(--yellow-500);border:1px dashed rgba(178,125,32,0.5);border-radius:999px;padding:3px 9px;white-space:nowrap;pointer-events:none;transition:opacity 0.12s ease-out;opacity:' +
+        (notes.length > 0 ? '0' : '0.55');
+      hint.innerHTML =
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>Note';
+      col.appendChild(hint);
+    };
+
+    col.addEventListener('click', () => {
+      const arr = (sideNotesStore.get(key) ?? []).slice();
+      arr.push('');
+      sideNotesStore.set(key, arr);
+      paint();
+      const areas = col.querySelectorAll('textarea');
+      (areas[areas.length - 1] as HTMLTextAreaElement | undefined)?.focus();
+    });
+
+    paint();
+    return col;
+  }
+
+  // ── Cell card ─────────────────────────────────────────────────
   function makeCellCard(i: number, code: string): HTMLElement {
     const card = document.createElement('div');
-    card.style.cssText = [
-      'background:#fff;border:1px solid var(--nm-border);border-radius:var(--nm-radius-lg)',
-      'padding:14px;margin-bottom:12px;cursor:pointer;transition:all 0.15s;box-shadow:var(--nm-shadow-xs)'
-    ].join(';');
-    card.addEventListener('click', () => {
-      selected = i;
-      highlight();
-      renderDetail();
-    });
+    card.style.cssText =
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
 
+    // Header: 01 + title
     const headRow = document.createElement('div');
     headRow.style.cssText =
-      'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px';
-
-    const title = document.createElement('div');
-    title.style.cssText =
-      'font-size:14px;font-weight:700;color:var(--nm-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-    title.textContent = cellTitle(docKey, code, i);
-
-    const rightGroup = document.createElement('div');
-    rightGroup.style.cssText =
-      'display:flex;align-items:center;gap:8px;flex-shrink:0';
-    const tag = document.createElement('span');
-    tag.style.cssText =
-      'font-family:var(--nm-font-mono);font-size:11px;color:var(--nm-text-faint)';
-    tag.textContent = `In [${i + 1}]`;
-    rightGroup.appendChild(tag);
-
-    headRow.appendChild(title);
-    headRow.appendChild(rightGroup);
+      'display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border-subtle)';
+    headRow.innerHTML =
+      `<span style="font-size:11px;font-weight:600;color:var(--text-quaternary);font-family:var(--font-mono)">${String(i + 1).padStart(2, '0')}</span>` +
+      `<span style="font-size:13.5px;font-weight:600;letter-spacing:-0.012em;color:var(--text-primary)">${cellTitle(docKey, code, i)}</span>`;
     card.appendChild(headRow);
 
-    const cv = makeCodeField(code, { readOnly: true });
-    card.appendChild(cv.dom);
+    // Code (flush)
+    const pre = document.createElement('pre');
+    pre.style.cssText =
+      'margin:0;padding:12px 16px;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);background:var(--bg-base);overflow-x:auto;white-space:pre';
+    pre.textContent = code;
+    card.appendChild(pre);
 
+    // Output band
+    const band = document.createElement('div');
+    band.style.cssText =
+      'padding:12px 16px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);background:var(--bg-base)';
+    const bandLbl = document.createElement('span');
+    bandLbl.style.cssText = `${CAPS};font-size:10px;letter-spacing:0.07em;display:flex;align-items:center;gap:6px;margin-bottom:8px`;
+    bandLbl.innerHTML =
+      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>Output';
+    band.appendChild(bandLbl);
+    const outBox = document.createElement('div');
+    outBox.style.cssText =
+      'padding:11px 13px;background:var(--bg-panel);border:1px solid var(--border-default);border-radius:7px';
     const outText = results[i].output.trim();
     if (outText) {
       const out = document.createElement('pre');
-      out.style.cssText = [
-        'margin:10px 0 0;font-family:var(--nm-font-mono);font-size:11.5px;line-height:1.5',
-        'white-space:pre-wrap;color:var(--nm-text-secondary);max-height:160px;overflow:auto'
-      ].join(';');
+      out.style.cssText =
+        'margin:0;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;max-height:180px;overflow:auto';
       out.textContent = outText;
-      card.appendChild(out);
+      outBox.appendChild(out);
     }
-
-    // Chart: render the figure directly under the code/output.
-    if (results[i].images.length > 0) {
-      const chartLabel = document.createElement('div');
-      chartLabel.style.cssText =
-        'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--nm-text-muted);margin:12px 0 6px';
-      chartLabel.textContent = '📈 Chart output';
-      card.appendChild(chartLabel);
-      results[i].images.forEach(src => {
-        const img = document.createElement('img');
-        img.src = src;
-        img.style.cssText =
-          'max-width:100%;border:1px solid var(--nm-border);border-radius:var(--nm-radius);margin-top:4px;display:block';
-        card.appendChild(img);
-      });
+    results[i].images.forEach(src => {
+      const img = document.createElement('img');
+      img.src = src;
+      img.style.cssText =
+        'max-width:100%;border-radius:5px;display:block' +
+        (outText ? ';margin-top:8px' : '');
+      outBox.appendChild(img);
+    });
+    if (!outText && results[i].images.length === 0) {
+      const none = document.createElement('span');
+      none.style.cssText =
+        'font-size:12px;color:var(--text-quaternary);font-style:italic';
+      none.textContent = 'no printed output';
+      outBox.appendChild(none);
     }
+    band.appendChild(outBox);
+    card.appendChild(band);
 
-    cellEls.push(card);
+    // ── Insight source switch + panel ───────────────────────────
+    const tabsRow = document.createElement('div');
+    tabsRow.style.cssText = 'display:flex;gap:2px;padding:10px 16px 0';
+    const body = document.createElement('div');
+    body.style.cssText =
+      'margin:10px 16px 16px;padding:14px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:8px;display:flex;flex-direction:column;gap:12px';
+
+    tabsRow.appendChild(
+      tabBar(
+        [
+          { id: 'ai', label: 'AI explanation' },
+          { id: 'teacher', label: 'Teacher notes' },
+          { id: 'student', label: 'Student comments' }
+        ],
+        tabState.get(i) ?? 'ai',
+        id => {
+          tabState.set(i, id as DetailTab);
+          renderTab(body, i);
+        }
+      )
+    );
+    card.appendChild(tabsRow);
+    card.appendChild(body);
+
+    renderTab(body, i);
     return card;
   }
 
-  // ── Detail panel with tabs ────────────────────────────────────
-  function renderDetail(): void {
-    rightCol.innerHTML = '';
-    const i = selected;
-
-    const panel = document.createElement('div');
-    panel.style.cssText = [
-      'background:#fff;border:1px solid var(--nm-border);border-radius:var(--nm-radius-lg)',
-      'padding:18px;box-shadow:var(--nm-shadow-sm);max-height:calc(100vh - 120px);overflow:auto'
-    ].join(';');
-
-    const title = document.createElement('div');
-    title.style.cssText =
-      'font-size:17px;font-weight:800;color:var(--nm-text);margin-bottom:14px;line-height:1.3';
-    title.textContent = cellTitle(docKey, cells[i], i);
-    panel.appendChild(title);
-
-    // Tabs
-    const tabs: { id: DetailTab; label: string }[] = [
-      { id: 'ai', label: '🤖 AI' },
-      { id: 'teacher', label: '👩‍🏫 Teacher' },
-      { id: 'student', label: '💬 Students' }
-    ];
-    const tabBar = document.createElement('div');
-    tabBar.style.cssText =
-      'display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--nm-border)';
-    const content = document.createElement('div');
-
-    tabs.forEach(t => {
-      const b = document.createElement('button');
-      b.textContent = t.label;
-      const on = detailTab === t.id;
-      b.style.cssText = [
-        'flex:1;padding:9px 4px;border:none;background:transparent;cursor:pointer',
-        'font-size:13px;font-weight:600;font-family:var(--nm-font)',
-        `color:${on ? 'var(--nm-accent)' : 'var(--nm-text-secondary)'}`,
-        `border-bottom:2px solid ${on ? 'var(--nm-accent)' : 'transparent'};margin-bottom:-1px`
-      ].join(';');
-      b.addEventListener('click', () => {
-        detailTab = t.id;
-        renderDetail();
-      });
-      tabBar.appendChild(b);
-    });
-
-    if (detailTab === 'ai') {
-      renderAiTab(content, i);
-    } else if (detailTab === 'teacher') {
-      renderTeacherTab(content, i);
+  function renderTab(body: HTMLElement, i: number): void {
+    body.innerHTML = '';
+    const tab = tabState.get(i) ?? 'ai';
+    if (tab === 'ai') {
+      renderAiTab(body, i);
+    } else if (tab === 'teacher') {
+      renderTeacherTab(body, i);
     } else {
-      renderStudentTab(content, i);
+      renderStudentTab(body, i);
     }
-
-    panel.appendChild(tabBar);
-    panel.appendChild(content);
-    rightCol.appendChild(panel);
   }
 
-  function renderAiTab(host: HTMLElement, i: number): void {
-    const expArea = document.createElement('div');
-    expArea.style.marginBottom = '16px';
-    host.appendChild(expArea);
+  // ── AI tab: explanation + matching slide + chat ───────────────
+  function renderAiTab(body: HTMLElement, i: number): void {
+    const textWrap = document.createElement('div');
+    textWrap.style.cssText =
+      'display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.7;color:var(--text-secondary)';
+    body.appendChild(textWrap);
 
     const meta = demoCellMeta(docKey, i);
     if (meta?.ai) {
-      expArea.appendChild(renderMarkdown(meta.ai));
+      textWrap.appendChild(renderMarkdown(meta.ai));
     } else {
       const cached = explanationCache.get(i);
       if (cached) {
-        expArea.appendChild(renderMarkdown(cached));
+        textWrap.appendChild(renderMarkdown(cached));
       } else {
-        expArea.appendChild(spinner('Generating explanation…'));
+        textWrap.appendChild(spinner('Generating explanation…'));
         void explainCell(cells[i], 'intermediate')
           .then(text => {
             explanationCache.set(i, text);
-            if (selected === i && detailTab === 'ai') {
-              expArea.innerHTML = '';
-              expArea.appendChild(renderMarkdown(text));
+            if ((tabState.get(i) ?? 'ai') === 'ai') {
+              textWrap.innerHTML = '';
+              textWrap.appendChild(renderMarkdown(text));
             }
           })
           .catch(() => {
-            expArea.innerHTML = '';
-            expArea.appendChild(
+            textWrap.innerHTML = '';
+            textWrap.appendChild(
               infoBox('Could not generate an explanation. Check your AI key.', 'error')
             );
           });
       }
     }
 
-    // Slides embedded directly in the cell's context (not a separate panel).
-    host.appendChild(buildSlideEmbed(i));
-
-    host.appendChild(sectionLabel('Ask about this cell'));
-    host.appendChild(buildChat(i));
+    body.appendChild(buildSlideEmbed(i));
+    body.appendChild(buildChat(i));
   }
 
-  // ── Inline lecture slide embedded in the cell context ─────────
-  function buildSlideEmbed(i: number): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.style.marginBottom = '16px';
-
-    const slides = demoCellSlides(docKey, i);
-    const deck = slides ? deckForPdf(slides.pdf) : undefined;
-
-    const lbl = sectionLabel('📄 Slide for this cell');
-    wrap.appendChild(lbl);
-
-    if (slides && deck) {
-      const idx = Math.max(0, Math.min(slides.page - 1, deck.slides.length - 1));
-
-      // Render the single relevant slide inline. The slide uses viewport-based
-      // font sizes, so we render it at 3× width inside a scaled holder to get a
-      // crisp miniature that fits the panel without clipping.
-      const frame = document.createElement('div');
-      frame.style.cssText = [
-        'border:1px solid var(--nm-border);border-radius:var(--nm-radius)',
-        'overflow:hidden;margin-bottom:8px;aspect-ratio:16/9;position:relative'
-      ].join(';');
-      const holder = document.createElement('div');
-      holder.style.cssText =
-        'position:absolute;top:0;left:0;width:300%;transform:scale(0.3333);transform-origin:top left';
-      holder.appendChild(renderSlide(deck.slides[idx], idx + 1, deck.slides.length));
-      frame.appendChild(holder);
-      wrap.appendChild(frame);
-
-      const cap = document.createElement('div');
-      cap.style.cssText =
-        'font-size:12px;color:var(--nm-text-muted);margin-bottom:8px';
-      cap.textContent = `${slides.label} · slide ${idx + 1} of ${deck.slides.length}`;
-      wrap.appendChild(cap);
-
-      const open = button('View full deck →', 'ghost');
-      open.style.cssText += ';width:100%';
-      open.addEventListener('click', () => openSlides(deck, idx));
-      wrap.appendChild(open);
-    } else {
-      const empty = document.createElement('div');
-      empty.style.cssText = [
-        'font-size:13px;color:var(--nm-text-muted);background:var(--nm-bg-subtle)',
-        'border:1px dashed var(--nm-border);border-radius:var(--nm-radius);padding:12px;line-height:1.5'
-      ].join(';');
-      empty.textContent = 'No lecture slide is linked to this cell yet.';
-      wrap.appendChild(empty);
-    }
-
-    // Student signals: request slides / flag unclear explanation.
-    wrap.appendChild(buildMaterialRequest(i, !!(slides && deck)));
-    return wrap;
-  }
-
-  function buildMaterialRequest(i: number, hasSlides: boolean): HTMLElement {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap';
-
-    const confirm = document.createElement('div');
-    confirm.style.cssText =
-      'font-size:12px;color:var(--nm-accent-hover);margin-top:8px;display:none';
-
-    const signal = (type: 'request_slides' | 'missing_info', msg: string) => {
-      document.dispatchEvent(
-        new CustomEvent('notebookmind:material-request', {
-          detail: { docKey, cellIndex: i, type }
-        })
-      );
-      confirm.textContent = msg;
-      confirm.style.display = 'block';
-    };
-
-    if (!hasSlides) {
-      const reqBtn = button('🙋 Request slides', 'secondary');
-      reqBtn.addEventListener('click', () =>
-        signal('request_slides', '✓ Slide request sent to your teacher.')
-      );
-      row.appendChild(reqBtn);
-    }
-
-    const missBtn = button('⚠️ Mark missing info', 'ghost');
-    missBtn.addEventListener('click', () =>
-      signal('missing_info', '✓ Thanks — flagged this explanation as unclear.')
-    );
-    row.appendChild(missBtn);
-
-    const container = document.createElement('div');
-    container.appendChild(row);
-    container.appendChild(confirm);
-    return container;
-  }
-
-  function renderTeacherTab(host: HTMLElement, i: number): void {
+  // ── Teacher tab ───────────────────────────────────────────────
+  function renderTeacherTab(body: HTMLElement, i: number): void {
     const meta = demoCellMeta(docKey, i);
     if (meta?.teacher) {
-      const wrap = document.createElement('div');
-      wrap.style.cssText = [
-        'border-left:3px solid var(--nm-warn);background:rgba(234,179,8,0.08)',
-        'border-radius:0 var(--nm-radius) var(--nm-radius) 0;padding:13px 16px'
-      ].join(';');
-      wrap.appendChild(renderMarkdown(meta.teacher));
-      host.appendChild(wrap);
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:flex-start';
+      row.appendChild(avatar('Teacher', 22));
+      const col = document.createElement('div');
+      col.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
+      const name = document.createElement('span');
+      name.style.cssText =
+        'font-size:12px;font-weight:600;color:var(--text-primary)';
+      name.textContent = 'Your teacher';
+      const text = document.createElement('div');
+      text.style.cssText =
+        'font-size:13px;line-height:1.65;color:var(--text-secondary)';
+      text.appendChild(renderMarkdown(meta.teacher));
+      col.appendChild(name);
+      col.appendChild(text);
+      row.appendChild(col);
+      body.appendChild(row);
     } else {
-      host.appendChild(
-        infoBox(
-          'No teacher explanation for this cell yet — teacher authoring is coming soon.',
-          'info'
-        )
-      );
+      const empty = document.createElement('div');
+      empty.style.cssText =
+        'display:flex;flex-direction:column;align-items:center;gap:8px;padding:18px;text-align:center';
+      empty.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>' +
+        '<span style="font-size:12.5px;color:var(--text-tertiary)">No teacher note for this cell yet.</span>';
+      const req = button('Request a note', 'secondary');
+      req.style.height = 'var(--control-sm)';
+      req.style.fontSize = '12px';
+      const confirm = document.createElement('span');
+      confirm.style.cssText =
+        'font-size:12px;color:var(--accent-text);display:none';
+      req.addEventListener('click', () => {
+        document.dispatchEvent(
+          new CustomEvent('notebookmind:material-request', {
+            detail: { docKey, cellIndex: i, type: 'missing_info' }
+          })
+        );
+        confirm.textContent =
+          'Flagged — the teacher will see that this cell needs more material.';
+        confirm.style.display = '';
+      });
+      empty.appendChild(req);
+      empty.appendChild(confirm);
+      body.appendChild(empty);
     }
-
-    // Lecture slides are now embedded inline in the cell's AI context tab.
   }
 
-  function renderStudentTab(host: HTMLElement, i: number): void {
+  // ── Students tab ──────────────────────────────────────────────
+  function renderStudentTab(body: HTMLElement, i: number): void {
     const meta = demoCellMeta(docKey, i);
-
-    // Seeded classmate comments (read-only) with an initials avatar.
-    (meta?.students ?? []).forEach(c => {
+    const comments = meta?.students ?? [];
+    if (comments.length === 0) {
+      const none = document.createElement('span');
+      none.style.cssText =
+        'font-size:12.5px;color:var(--text-tertiary);text-align:center;padding:8px';
+      none.textContent =
+        'No classmate comments on this cell yet — yours could be the first.';
+      body.appendChild(none);
+    }
+    comments.forEach(c => {
       const row = document.createElement('div');
-      row.style.cssText =
-        'display:flex;gap:10px;align-items:flex-start;background:var(--nm-bg-subtle);border:1px solid var(--nm-border);border-radius:var(--nm-radius);padding:10px 12px;margin-bottom:8px';
-      row.appendChild(avatar(c.author));
+      row.style.cssText = 'display:flex;gap:10px;align-items:flex-start';
+      row.appendChild(avatar(c.author, 22));
       const col = document.createElement('div');
-      col.style.minWidth = '0';
-      const who = document.createElement('div');
-      who.style.cssText =
-        'font-size:11px;font-weight:700;color:var(--nm-text);margin-bottom:3px';
-      who.textContent = c.author;
-      const txt = document.createElement('div');
-      txt.style.cssText = 'font-size:13px;color:var(--nm-text);line-height:1.55';
-      txt.textContent = c.text;
-      col.appendChild(who);
-      col.appendChild(txt);
+      col.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
+      col.innerHTML =
+        `<span style="font-size:12px;font-weight:600;color:var(--text-primary)">${c.author}</span>` +
+        `<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-secondary)">${c.text}</p>`;
       row.appendChild(col);
-      host.appendChild(row);
+      body.appendChild(row);
     });
 
-    // The learner's own editable note.
-    const lbl = sectionLabel('Your note');
-    lbl.style.marginTop = (meta?.students?.length ?? 0) ? '12px' : '0';
-    host.appendChild(lbl);
-
+    const noteWrap = document.createElement('div');
+    noteWrap.style.cssText =
+      'display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border-subtle);padding-top:12px';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = CAPS;
+    lbl.textContent = 'Your note';
     const ta = document.createElement('textarea');
-    ta.rows = 3;
+    ta.rows = 2;
     ta.value = studentNotesStore.get(noteKey(i)) ?? '';
-    ta.placeholder =
-      'What clicked for you here, or what you misread at first…';
-    ta.style.cssText = [
-      'width:100%;box-sizing:border-box;resize:vertical;font-family:var(--nm-font);font-size:13px',
-      'padding:9px 11px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);outline:none;color:var(--nm-text)'
-    ].join(';');
-    host.appendChild(ta);
-
-    const save = button('Save note', 'secondary');
-    save.style.marginTop = '8px';
-    save.addEventListener('click', () => {
+    ta.placeholder = 'Share what helped you understand this cell…';
+    ta.style.cssText =
+      'width:100%;box-sizing:border-box;resize:vertical;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:9px 12px;font-family:var(--font-sans);font-size:13px;line-height:1.5;outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)';
+    ta.addEventListener('focus', () => {
+      ta.style.borderColor = 'var(--accent)';
+      ta.style.boxShadow = '0 0 0 3px var(--brand-glow)';
+    });
+    ta.addEventListener('blur', () => {
+      ta.style.borderColor = 'var(--border-strong)';
+      ta.style.boxShadow = 'none';
+    });
+    // Auto-saves like the prototype.
+    ta.addEventListener('input', () => {
       const v = ta.value.trim();
       if (v) {
         studentNotesStore.set(noteKey(i), v);
       } else {
         studentNotesStore.delete(noteKey(i));
       }
-      save.textContent = 'Saved ✓';
-      setTimeout(() => {
-        save.textContent = 'Save note';
-      }, 1200);
     });
-    host.appendChild(save);
+    noteWrap.appendChild(lbl);
+    noteWrap.appendChild(ta);
+    body.appendChild(noteWrap);
   }
 
-  function sectionLabel(text: string): HTMLElement {
-    const el = document.createElement('div');
-    el.style.cssText =
-      'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--nm-text-muted);margin:4px 0 8px';
-    el.textContent = text;
-    return el;
+  // ── Matching slide (prototype box) ────────────────────────────
+  function buildSlideEmbed(i: number): HTMLElement {
+    const slides = demoCellSlides(docKey, i);
+    const deck = slides ? deckForPdf(slides.pdf) : undefined;
+
+    const box = document.createElement('div');
+    box.style.cssText =
+      'display:flex;gap:12px;align-items:stretch;padding:10px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:7px';
+
+    if (slides && deck) {
+      const idx = Math.max(0, Math.min(slides.page - 1, deck.slides.length - 1));
+
+      // Miniature: real slide rendered at 3× and scaled down.
+      const frame = document.createElement('div');
+      frame.style.cssText =
+        'flex:0 0 148px;aspect-ratio:16/10;border-radius:5px;background:var(--surface-card);border:1px solid var(--border-default);position:relative;overflow:hidden';
+      const holder = document.createElement('div');
+      holder.style.cssText =
+        'position:absolute;top:0;left:0;width:300%;transform:scale(0.3333);transform-origin:top left';
+      holder.appendChild(renderSlide(deck.slides[idx], idx + 1, deck.slides.length));
+      frame.appendChild(holder);
+      box.appendChild(frame);
+
+      const col = document.createElement('div');
+      col.style.cssText =
+        'display:flex;flex-direction:column;gap:6px;justify-content:center;min-width:0';
+      const lbl = document.createElement('span');
+      lbl.style.cssText = CAPS;
+      lbl.textContent = 'Matching slide';
+      const ref = document.createElement('span');
+      ref.style.cssText = 'font-size:12.5px;color:var(--text-secondary)';
+      ref.textContent = `${slides.label} · slide ${idx + 1} of ${deck.slides.length}`;
+      const open = document.createElement('span');
+      open.style.cssText =
+        'font-size:12px;color:var(--accent-text);cursor:pointer;font-weight:500';
+      open.textContent = 'Open the full deck →';
+      open.addEventListener('mouseenter', () => {
+        open.style.textDecoration = 'underline';
+      });
+      open.addEventListener('mouseleave', () => {
+        open.style.textDecoration = 'none';
+      });
+      open.addEventListener('click', () => openSlides(deck, idx));
+      col.appendChild(lbl);
+      col.appendChild(ref);
+      col.appendChild(open);
+      box.appendChild(col);
+      return box;
+    }
+
+    // No slide linked → request row
+    const col = document.createElement('div');
+    col.style.cssText =
+      'display:flex;flex-direction:column;gap:6px;justify-content:center;min-width:0;flex:1';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = CAPS;
+    lbl.textContent = 'Matching slide';
+    const none = document.createElement('span');
+    none.style.cssText = 'font-size:12.5px;color:var(--text-tertiary)';
+    none.textContent = 'No lecture slide is linked to this cell yet.';
+    const req = document.createElement('span');
+    req.style.cssText =
+      'font-size:12px;color:var(--accent-text);cursor:pointer;font-weight:500';
+    req.textContent = 'Request slides from your teacher →';
+    req.addEventListener('click', () => {
+      document.dispatchEvent(
+        new CustomEvent('notebookmind:material-request', {
+          detail: { docKey, cellIndex: i, type: 'request_slides' }
+        })
+      );
+      req.textContent = 'Request sent ✓';
+      req.style.cursor = 'default';
+    });
+    col.appendChild(lbl);
+    col.appendChild(none);
+    col.appendChild(req);
+    box.appendChild(col);
+    return box;
   }
 
-  // ── Per-cell chat (input height matches the send button) ──────
+  // ── Per-cell chat (prototype bubbles) ─────────────────────────
   function buildChat(i: number): HTMLElement {
     const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--border-subtle);padding-top:12px';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = CAPS;
+    lbl.textContent = 'Ask about this cell';
+    wrap.appendChild(lbl);
 
     const log = document.createElement('div');
     log.style.cssText =
-      'display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto;margin-bottom:10px';
-
+      'display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto';
     const history = chatHistory.get(i) ?? [];
-    if (history.length === 0) {
-      const hint = document.createElement('div');
-      hint.style.cssText =
-        'font-size:12.5px;color:var(--nm-text-faint);font-style:italic';
-      hint.textContent =
-        'e.g. "Why .clip(0,100)?" or "What would change if I removed this line?"';
-      log.appendChild(hint);
-    } else {
-      history.forEach(t => log.appendChild(bubble(t.role, t.text)));
-    }
+    history.forEach(t => log.appendChild(bubble(t.role, t.text)));
+    wrap.appendChild(log);
 
     const inputRow = document.createElement('div');
     inputRow.style.cssText = 'display:flex;gap:8px;align-items:stretch';
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Ask a question…';
-    input.style.cssText = [
-      'flex:1;box-sizing:border-box;height:40px;font-family:var(--nm-font);font-size:13px',
-      'padding:0 12px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);outline:none;color:var(--nm-text)'
-    ].join(';');
+    input.placeholder = 'Why does this work? What if…?';
+    input.style.cssText =
+      'flex:1;height:38px;box-sizing:border-box;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:0 12px;font-size:13px;font-family:var(--font-sans);outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)';
     input.addEventListener('focus', () => {
-      input.style.borderColor = 'var(--nm-accent)';
+      input.style.borderColor = 'var(--accent)';
+      input.style.boxShadow = '0 0 0 3px var(--brand-glow)';
     });
     input.addEventListener('blur', () => {
-      input.style.borderColor = 'var(--nm-border)';
+      input.style.borderColor = 'var(--border-strong)';
+      input.style.boxShadow = 'none';
     });
 
-    const send = button('Ask', 'accent');
-    send.style.height = '40px';
-    send.style.padding = '0 16px';
+    const send = button('Ask', 'secondary');
+    send.style.height = '38px';
     send.addEventListener('click', () => void submit());
     input.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Enter') {
@@ -546,12 +516,12 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       }
       input.value = '';
       const hist = chatHistory.get(i) ?? [];
-      if (hist.length === 0) {
-        log.innerHTML = '';
-      }
       hist.push({ role: 'user', text: q });
       log.appendChild(bubble('user', q));
-      const thinking = bubble('assistant', '…');
+      const thinking = document.createElement('span');
+      thinking.style.cssText =
+        'font-size:12px;color:var(--text-quaternary);animation:nm-pulse 1.2s ease-in-out infinite';
+      thinking.textContent = 'Thinking…';
       log.appendChild(thinking);
       log.scrollTop = log.scrollHeight;
       send.disabled = true;
@@ -562,11 +532,13 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
           hist.slice(0, -1),
           results[i].output
         );
-        thinking.textContent = answer;
+        thinking.remove();
+        log.appendChild(bubble('assistant', answer));
         hist.push({ role: 'assistant', text: answer });
         chatHistory.set(i, hist);
       } catch {
-        thinking.textContent = 'Sorry — something went wrong. Try again.';
+        thinking.remove();
+        log.appendChild(bubble('assistant', 'Sorry — something went wrong. Try again.'));
       } finally {
         send.disabled = false;
         log.scrollTop = log.scrollHeight;
@@ -575,22 +547,25 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
 
     inputRow.appendChild(input);
     inputRow.appendChild(send);
-    wrap.appendChild(log);
     wrap.appendChild(inputRow);
     return wrap;
   }
 
   function bubble(role: 'user' | 'assistant', text: string): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText =
+      'display:flex;' +
+      (role === 'user' ? 'justify-content:flex-end' : 'justify-content:flex-start');
     const b = document.createElement('div');
-    const isUser = role === 'user';
     b.style.cssText = [
-      'font-size:13px;line-height:1.6;padding:9px 12px;border-radius:var(--nm-radius);max-width:90%;white-space:pre-wrap',
-      isUser
-        ? 'align-self:flex-end;background:var(--nm-accent);color:#fff'
-        : 'align-self:flex-start;background:var(--nm-bg-subtle);color:var(--nm-text);border:1px solid var(--nm-border)'
+      'max-width:82%;padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.55;white-space:pre-wrap',
+      role === 'user'
+        ? 'background:var(--accent-subtle-bg);color:var(--text-primary);border:1px solid rgba(94,106,210,0.3)'
+        : 'background:var(--bg-base);color:var(--text-secondary);border:1px solid var(--border-subtle)'
     ].join(';');
     b.textContent = text;
-    return b;
+    row.appendChild(b);
+    return row;
   }
 
   // ── Preparation: run all cells to capture output + figures ────
@@ -625,14 +600,14 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       }
     } else {
       const warn = infoBox(
-        '⚠️ No Python kernel available — showing code and explanations without live output or charts.',
+        'No Python kernel available — showing code and explanations without live output or charts.',
         'warn'
       );
-      warn.style.marginBottom = '16px';
+      warn.style.cssText += ';max-width:780px;margin:0 auto 16px';
       host.insertBefore(warn, stage);
     }
 
-    buildSplit();
+    build();
   }
 
   void prepare();

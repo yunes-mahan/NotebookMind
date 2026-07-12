@@ -1,38 +1,41 @@
 import { NotebookMindApp } from './nbApp';
-import { IChallenge, ChallengeType, Difficulty } from './challenge';
-import { generateChallenge, summarizeNotebook } from './gemini';
+import { IChallenge, ChallengeType } from './challenge';
+import { generateChallenge } from './gemini';
 import { normalizeOutput } from './kernelRunner';
 import { burstFrom } from './confetti';
-import { DIFFICULTY_META, XP_BY_DIFFICULTY } from './xp';
+import { XP_BY_DIFFICULTY } from './xp';
 import { pointsEngine } from './points';
 import { makeCodeField } from './codeField';
-import { demoChallenge, demoAssignment } from './demoData';
-import { button, infoBox, spinner, maxWidth } from './uiKit';
+import { demoChallenge } from './demoData';
+import { button, infoBox, spinner, maxWidth, celebrate } from './uiKit';
 
 // Rotate types so a notebook genuinely uses all the styles.
 const ROTATION: ChallengeType[] = ['predict-mc', 'bugfix', 'fillblank'];
 
 const TYPE_LABEL: Record<ChallengeType, string> = {
-  bugfix: '🐛 Find the bug',
-  fillblank: '✏️ Fill in the cell',
-  'predict-mc': '🔍 What does this code do?',
-  'predict-free': '✍️ Predict the output'
+  bugfix: 'Fix the bug',
+  fillblank: 'Write the cell',
+  'predict-mc': 'What does this code do?',
+  'predict-free': 'Predict the output'
 };
 
 interface IStep {
   wrapper: HTMLElement;
-  status: HTMLElement;
+  num: HTMLElement;
   title: HTMLElement;
-  chip: HTMLElement;
+  state: HTMLElement;
   body: HTMLElement;
 }
 
 const CARD_BASE =
-  'background:#fff;border-radius:var(--nm-radius-lg);padding:16px 18px;' +
-  'margin-bottom:12px;transition:all 0.2s;border:1px solid var(--nm-border)';
+  'background:var(--surface-card);border-radius:10px;overflow:hidden;' +
+  'margin-bottom:12px;transition:opacity 0.2s ease-out;border:1px solid var(--border-default)';
+
+const CAPS_LABEL =
+  'font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase';
 
 export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
-  const root = maxWidth(host);
+  const root = maxWidth(host, 780);
   const doc = app.doc;
   if (!doc) {
     app.navigate('home');
@@ -40,197 +43,141 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
   }
 
   const cells = doc.cells;
-  const docName = doc.name;
   const docKey = doc.key;
   let activeIndex = 0;
   let canonicalIndex = 0;
   let completedCount = 0;
   let kernelAvailable = false;
 
-  // Header: title + a short description of the notebook (not "Learn mode …").
-  const headerWrap = document.createElement('div');
-  headerWrap.style.cssText = 'margin-bottom:22px';
-  const headerTitle = document.createElement('div');
-  headerTitle.style.cssText =
-    'font-size:26px;font-weight:800;letter-spacing:-0.02em;color:var(--nm-text);line-height:1.15';
-  headerTitle.textContent = docName;
-  const headerSub = document.createElement('div');
-  headerSub.style.cssText =
-    'font-size:14px;color:var(--nm-text-secondary);margin-top:7px;line-height:1.6';
-  const seededDesc = demoAssignment(docKey);
-  headerSub.textContent =
-    seededDesc ?? 'Work through each step to unlock the next and earn XP.';
-  headerWrap.appendChild(headerTitle);
-  headerWrap.appendChild(headerSub);
-  root.appendChild(headerWrap);
-
-  // For non-seeded notebooks, fetch a short description in the background.
-  if (!seededDesc) {
-    void summarizeNotebook(cells)
-      .then(text => {
-        headerSub.textContent = text;
-      })
-      .catch(() => undefined);
-  }
-
-  const progressLabel = document.createElement('div');
+  // ── Progress row + bar (prototype) ────────────────────────────
+  const progressRow = document.createElement('div');
+  progressRow.style.cssText =
+    'display:flex;align-items:baseline;gap:10px;margin-bottom:7px';
+  const progressLabel = document.createElement('span');
   progressLabel.style.cssText =
-    'font-size:13px;font-weight:600;color:var(--nm-text-secondary);margin-bottom:8px;display:flex;justify-content:space-between';
+    'font-size:12.5px;color:var(--text-secondary);font-weight:500';
+  const runXp = document.createElement('span');
+  runXp.style.cssText =
+    'font-size:12px;color:var(--accent-text);font-weight:500;font-family:var(--font-mono);margin-left:auto';
+  progressRow.appendChild(progressLabel);
+  progressRow.appendChild(runXp);
 
   const track = document.createElement('div');
   track.style.cssText =
-    'background:var(--nm-border);border-radius:6px;height:7px;overflow:hidden;margin-bottom:22px';
+    'height:5px;border-radius:3px;background:var(--gray-800);overflow:hidden;margin-bottom:16px';
   const fill = document.createElement('div');
   fill.style.cssText =
-    'height:100%;background:linear-gradient(90deg,var(--nm-accent),var(--nm-success));border-radius:6px;transition:width 0.4s';
+    'height:100%;border-radius:3px;background:linear-gradient(90deg,var(--brand-600),var(--brand-400));transition:width 0.4s var(--ease-out);width:0%';
   track.appendChild(fill);
 
   const list = document.createElement('div');
 
-  root.appendChild(progressLabel);
+  root.appendChild(progressRow);
   root.appendChild(track);
   root.appendChild(list);
 
   const steps: IStep[] = [];
 
   function updateProgress(): void {
-    progressLabel.innerHTML =
-      `<span>${completedCount} / ${cells.length} steps complete</span>` +
-      `<span>⭐ ${app.xp.total} XP this run</span>`;
+    progressLabel.textContent = `${completedCount} / ${cells.length} steps complete`;
+    runXp.textContent = `+${app.xp.total} XP this run`;
     fill.style.width = `${(completedCount / cells.length) * 100}%`;
-  }
-
-  function statusBadge(): HTMLElement {
-    const b = document.createElement('div');
-    b.style.cssText = [
-      'width:26px;height:26px;border-radius:50%;flex-shrink:0',
-      'display:flex;align-items:center;justify-content:center',
-      'font-size:13px;font-weight:700'
-    ].join(';');
-    return b;
-  }
-
-  function setDifficulty(step: IStep, d: Difficulty): void {
-    const meta = DIFFICULTY_META[d];
-    step.chip.style.display = 'inline-block';
-    step.chip.style.cssText = [
-      'display:inline-block',
-      `background:${meta.color}1A;color:${meta.color}`,
-      'padding:3px 11px;border-radius:20px;font-size:12px;font-weight:700;flex-shrink:0'
-    ].join(';');
-    step.chip.textContent = `${meta.label} · ${XP_BY_DIFFICULTY[d]} XP`;
   }
 
   function buildStep(i: number): IStep {
     const wrapper = document.createElement('div');
     const header = document.createElement('div');
     header.style.cssText =
-      'display:flex;align-items:center;gap:11px';
-    const status = statusBadge();
-    const title = document.createElement('div');
-    title.style.cssText =
-      'flex:1;min-width:0;font-size:15px;font-weight:700;color:var(--nm-text)';
-    const chip = document.createElement('span');
-    chip.style.display = 'none';
+      'display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border-subtle)';
+    const num = document.createElement('span');
+    num.textContent = String(i + 1).padStart(2, '0');
+    const title = document.createElement('span');
+    const state = document.createElement('span');
+    const spacer = document.createElement('span');
+    spacer.style.flex = '1';
     const body = document.createElement('div');
-    body.style.cssText = 'margin-top:16px';
 
-    header.appendChild(status);
+    header.appendChild(num);
     header.appendChild(title);
-    header.appendChild(chip);
+    header.appendChild(spacer);
+    header.appendChild(state);
     wrapper.appendChild(header);
     wrapper.appendChild(body);
     list.appendChild(wrapper);
 
-    const step: IStep = { wrapper, status, title, chip, body };
+    const step: IStep = { wrapper, num, title, state, body };
     lockStep(step, i);
     return step;
   }
 
+  function paintHeader(
+    step: IStep,
+    kind: 'locked' | 'active' | 'done'
+  ): void {
+    step.num.style.cssText =
+      'font-size:11px;font-weight:600;font-family:var(--font-mono);color:' +
+      (kind === 'active' ? 'var(--accent-text)' : 'var(--text-quaternary)');
+    step.title.style.cssText =
+      'font-size:13.5px;font-weight:600;letter-spacing:-0.012em;color:' +
+      (kind === 'locked' ? 'var(--text-tertiary)' : 'var(--text-primary)');
+    step.state.style.cssText =
+      'font-size:11px;font-weight:500;color:' +
+      (kind === 'done'
+        ? 'var(--green-400)'
+        : kind === 'active'
+        ? 'var(--accent-text)'
+        : 'var(--text-quaternary)');
+    step.state.textContent =
+      kind === 'done' ? 'Completed' : kind === 'active' ? 'Active' : 'Locked';
+  }
+
   function lockStep(step: IStep, i: number): void {
-    step.wrapper.style.cssText = CARD_BASE + ';opacity:0.6;background:var(--nm-bg-subtle)';
-    step.status.style.background = 'var(--nm-border)';
-    step.status.style.color = 'var(--nm-text-muted)';
-    step.status.textContent = '🔒';
-    step.title.textContent = `Step ${i + 1} · Locked`;
-    step.title.style.color = 'var(--nm-text-muted)';
-    step.chip.style.display = 'none';
-    step.body.style.display = 'none';
+    step.wrapper.style.cssText = CARD_BASE + ';opacity:0.45';
+    paintHeader(step, 'locked');
+    step.title.textContent = `Step ${i + 1}`;
     step.body.innerHTML = '';
+    step.body.style.cssText =
+      'padding:11px 16px;font-size:12px;color:var(--text-quaternary)';
+    step.body.textContent = 'Complete the previous step to unlock.';
   }
 
   function markActiveChrome(i: number): void {
     const step = steps[i];
     step.wrapper.style.cssText =
-      CARD_BASE + ';border-color:var(--nm-accent);box-shadow:var(--nm-shadow-md)';
-    step.status.style.background = 'var(--nm-accent)';
-    step.status.style.color = '#fff';
-    step.status.textContent = String(i + 1);
-    step.title.style.color = 'var(--nm-text)';
-    step.body.style.display = 'block';
+      CARD_BASE +
+      ';border-color:rgba(94,106,210,0.5);box-shadow:0 0 0 3px var(--brand-glow)';
+    paintHeader(step, 'active');
+    step.body.innerHTML = '';
+    step.body.style.cssText =
+      'display:flex;flex-direction:column;gap:14px;padding:16px';
   }
 
   function completeStep(i: number, ch: IChallenge, awarded: boolean): void {
     const step = steps[i];
-    step.wrapper.style.cssText =
-      CARD_BASE + ';border-color:var(--nm-success)';
-    step.status.style.background = 'var(--nm-success)';
-    step.status.style.color = '#fff';
-    step.status.textContent = '✓';
+    step.wrapper.style.cssText = CARD_BASE;
+    paintHeader(step, 'done');
     step.title.textContent = `Step ${i + 1} · ${TYPE_LABEL[ch.type]}`;
-    step.title.style.color = 'var(--nm-text)';
-    const note = document.createElement('span');
-    note.style.cssText =
-      'margin-left:8px;font-size:12px;font-weight:600;color:var(--nm-success-text)';
-    note.textContent = awarded ? `+${XP_BY_DIFFICULTY[ch.difficulty]} XP` : 'revealed';
-    step.title.appendChild(note);
-    setDifficulty(step, ch.difficulty);
-    // Show the solved cell the way a real notebook would: code + its output.
-    step.body.style.display = 'block';
-    step.body.innerHTML = '';
-    step.body.appendChild(
-      notebookCellView(ch.originalCode, app.expectedOutputs[i] ?? '', i + 1)
-    );
-  }
-
-  function notebookCellView(
-    code: string,
-    output: string,
-    execCount: number
-  ): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px';
-
-    // Labels sit ABOVE the blocks so code/output use the full width.
-    const promptStyle =
-      'font-family:var(--nm-font-mono);font-size:11px;font-weight:700;margin:2px 0 2px';
-
-    const inLabel = document.createElement('div');
-    inLabel.style.cssText = `${promptStyle};color:var(--nm-accent)`;
-    inLabel.textContent = `In [${execCount}]`;
-    const cv = makeCodeField(code, { readOnly: true });
-    cv.dom.style.width = '100%';
-    wrap.appendChild(inLabel);
-    wrap.appendChild(cv.dom);
-
-    const text = output.trim();
-    const outLabel = document.createElement('div');
-    outLabel.style.cssText = `${promptStyle};color:var(--nm-text-faint);margin-top:8px`;
-    outLabel.textContent = `Out [${execCount}]`;
-    const outBox = document.createElement('pre');
-    outBox.style.cssText = [
-      'width:100%;box-sizing:border-box;margin:0;font-family:var(--nm-font-mono);font-size:12px;line-height:1.5',
-      'white-space:pre-wrap;color:var(--nm-text);padding:2px 0;overflow-x:auto'
-    ].join(';');
-    outBox.textContent = text || '↳ produced a chart / no text output';
-    if (!text) {
-      outBox.style.color = 'var(--nm-text-faint)';
-      outBox.style.fontStyle = 'italic';
+    if (!awarded) {
+      step.state.textContent = 'Revealed';
     }
-    wrap.appendChild(outLabel);
-    wrap.appendChild(outBox);
-
-    return wrap;
+    // Show the solved cell like the prototype: flush code + output.
+    step.body.style.cssText = 'display:flex;flex-direction:column;padding:0';
+    step.body.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.style.cssText =
+      'margin:0;padding:12px 16px;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);background:var(--bg-base);overflow-x:auto;white-space:pre';
+    pre.textContent = ch.originalCode;
+    step.body.appendChild(pre);
+    const outWrap = document.createElement('div');
+    outWrap.style.cssText =
+      'padding:10px 16px;border-top:1px solid var(--border-subtle)';
+    const out = document.createElement('pre');
+    out.style.cssText =
+      'margin:0;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text-tertiary);white-space:pre-wrap';
+    const text = (app.expectedOutputs[i] ?? '').trim();
+    out.textContent = text || '↳ produced a chart / no text output';
+    outWrap.appendChild(out);
+    step.body.appendChild(outWrap);
   }
 
   async function activate(i: number): Promise<void> {
@@ -255,7 +202,6 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     }
 
     step.title.textContent = `Step ${i + 1} · ${TYPE_LABEL[ch.type]}`;
-    setDifficulty(step, ch.difficulty);
     step.body.innerHTML = '';
 
     if (ch.type === 'predict-mc') {
@@ -265,29 +211,35 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     }
   }
 
-  // ── Briefing panel ────────────────────────────────────────────
+  // ── Briefing rows ("This cell" / "Your task") ─────────────────
   function briefing(ch: IChallenge): HTMLElement {
     const wrap = document.createElement('div');
-    wrap.style.cssText =
-      'background:var(--nm-bg-subtle);border:1px solid var(--nm-border);border-radius:var(--nm-radius);padding:14px 16px;margin-bottom:16px;display:flex;flex-direction:column;gap:12px';
-
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px';
     if (ch.summary) {
-      wrap.appendChild(briefRow('📋', 'What this cell does', ch.summary));
+      wrap.appendChild(
+        briefRow('This cell', ch.summary, 'var(--text-quaternary)', false)
+      );
     }
     const taskText = ch.instructions ?? defaultInstructions(ch.type);
-    wrap.appendChild(briefRow('🎯', 'Your task', taskText));
+    wrap.appendChild(briefRow('Your task', taskText, 'var(--accent-text)', true));
     return wrap;
   }
 
-  function briefRow(emoji: string, label: string, text: string): HTMLElement {
+  function briefRow(
+    label: string,
+    text: string,
+    labelColor: string,
+    strong: boolean
+  ): HTMLElement {
     const row = document.createElement('div');
-    const lbl = document.createElement('div');
-    lbl.style.cssText =
-      'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--nm-text-muted);margin-bottom:3px';
-    lbl.textContent = `${emoji} ${label}`;
-    const body = document.createElement('div');
-    body.style.cssText =
-      'font-size:13.5px;color:var(--nm-text);line-height:1.6';
+    row.style.cssText = 'display:flex;gap:8px;align-items:baseline';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = `${CAPS_LABEL};color:${labelColor};flex:0 0 92px`;
+    lbl.textContent = label;
+    const body = document.createElement('span');
+    body.style.cssText = strong
+      ? 'font-size:13px;color:var(--text-primary);font-weight:500;line-height:1.55'
+      : 'font-size:13px;color:var(--text-secondary);line-height:1.55';
     body.textContent = text;
     row.appendChild(lbl);
     row.appendChild(body);
@@ -307,17 +259,34 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     }
   }
 
-  // ── Solve / advance ───────────────────────────────────────────
-  function setRevealedChip(step: IStep): void {
-    step.chip.style.cssText = [
-      'display:inline-block;background:var(--nm-bg-section);color:var(--nm-text-muted)',
-      'padding:3px 11px;border-radius:20px;font-size:12px;font-weight:700;flex-shrink:0'
-    ].join(';');
-    step.chip.textContent = '👀 Revealed';
+  // ── Challenge panel (accent-subtle box) ───────────────────────
+  function challengePanel(ch: IChallenge, kindLabel: string): HTMLElement {
+    const panel = document.createElement('div');
+    panel.style.cssText =
+      'display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--accent-subtle-bg);border:1px solid rgba(94,106,210,0.35);border-radius:8px';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:8px';
+    head.innerHTML =
+      `<span style="${CAPS_LABEL};color:var(--accent-text)">${kindLabel}</span>` +
+      '<span style="flex:1"></span>' +
+      `<span style="font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono)">+${XP_BY_DIFFICULTY[ch.difficulty]} XP</span>`;
+    panel.appendChild(head);
+    return panel;
   }
 
+  function correctBox(msg: string): HTMLElement {
+    const el = document.createElement('div');
+    el.style.cssText =
+      'display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:6px;background:var(--green-bg);border:1px solid rgba(23,138,84,0.35);animation:nm-rise 0.2s ease-out both';
+    el.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green-400)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' +
+      `<span style="font-size:12.5px;color:var(--green-400);font-weight:500">${msg}</span>`;
+    return el;
+  }
+
+  // ── Solve / advance ───────────────────────────────────────────
   function showSolved(
-    host: HTMLElement,
+    host2: HTMLElement,
     ch: IChallenge,
     awarded: boolean,
     origin?: HTMLElement,
@@ -329,14 +298,12 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     if (awarded) {
       const xp = app.xp.award(ch.difficulty);
       pointsEngine.addPoints(xp, `learn-${ch.type}`);
+      celebrate(`+${xp} XP${firstTry ? ' · first try!' : ' · solved'}`);
       if (origin) {
         burstFrom(origin);
       }
-      // Advance immediately — no delay. The burst plays over the next step.
       void advance(ch, true);
     } else {
-      // Reveal: mark it in the chip and move on automatically (no button).
-      setRevealedChip(steps[activeIndex]);
       window.setTimeout(() => void advance(ch, false), 2200);
     }
   }
@@ -345,7 +312,6 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     completedCount += 1;
     updateProgress();
     const solvedIndex = activeIndex;
-    // Make sure the kernel holds correct state for the cell we just solved.
     if (kernelAvailable && canonicalIndex === solvedIndex) {
       try {
         await app.runner.run(cells[solvedIndex]);
@@ -395,51 +361,37 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
   }
 
   // ── Editor challenge (bugfix / fillblank) ─────────────────────
-  function renderEditorChallenge(host: HTMLElement, ch: IChallenge): void {
+  function renderEditorChallenge(host2: HTMLElement, ch: IChallenge): void {
     const isBug = ch.type === 'bugfix';
-    host.appendChild(briefing(ch));
+    host2.appendChild(briefing(ch));
+
+    const panel = challengePanel(ch, TYPE_LABEL[ch.type]);
 
     const field = makeCodeField(ch.presentedCode, { minLines: 5 });
-    host.appendChild(field.dom);
+    panel.appendChild(field.dom);
 
-    const outArea = document.createElement('div');
-    outArea.style.marginTop = '14px';
     const helpArea = document.createElement('div');
-    helpArea.style.marginTop = '12px';
+    const outArea = document.createElement('div');
 
     let revealedHints = 0;
     let firstTry = true;
 
     const controls = document.createElement('div');
-    controls.style.cssText = 'display:flex;gap:10px;margin-top:14px;flex-wrap:wrap';
+    controls.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
 
-    const runBtn = button(isBug ? '▶ Run & check fix' : '▶ Run cell', 'accent');
-    runBtn.style.flex = '1';
-
-    const helpBtn = button('💡 Show hint', 'secondary');
-
-    // Subtle grey fill so it sits quietly behind the main actions.
-    const revealBtn = document.createElement('button');
-    revealBtn.textContent = 'Show solution';
-    revealBtn.style.cssText = [
-      'padding:9px 15px;border-radius:var(--nm-radius-md);cursor:pointer;display:none',
-      'font:500 14px var(--nm-font-sans);color:var(--nm-fg-strong)',
-      'background:var(--nm-bg-section);border:1px solid var(--nm-border);transition:all 160ms var(--nm-ease)'
-    ].join(';');
-    revealBtn.addEventListener('mouseenter', () => {
-      revealBtn.style.background = 'var(--nm-border)';
-    });
-    revealBtn.addEventListener('mouseleave', () => {
-      revealBtn.style.background = 'var(--nm-bg-section)';
-    });
+    const runBtn = button(isBug ? 'Run & check' : 'Run cell', 'primary');
+    const helpBtn = button('Show hint', 'secondary');
+    const revealBtn = button('Reveal the answer', 'ghost');
+    revealBtn.style.display = 'none';
 
     controls.appendChild(runBtn);
     controls.appendChild(helpBtn);
     controls.appendChild(revealBtn);
 
-    host.appendChild(controls);
-    host.appendChild(helpArea);
-    host.appendChild(outArea);
+    panel.appendChild(helpArea);
+    panel.appendChild(outArea);
+    panel.appendChild(controls);
+    host2.appendChild(panel);
 
     function lockAfterSolve(): void {
       field.setEditable(false);
@@ -449,159 +401,156 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     }
 
     helpBtn.addEventListener('click', () => {
-      firstTry = false; // taking a hint means it's no longer a clean first try
+      firstTry = false;
       const idx = revealedHints;
       const hint =
         ch.hints[idx] ?? 'No more hints — inspect each line carefully.';
       revealedHints = idx + 1;
       helpArea.innerHTML = '';
-      helpArea.appendChild(hintBox(`💡 Hint ${idx + 1}: ${hint}`));
-      // After a hint, offer the full solution.
-      revealBtn.style.display = 'block';
+      helpArea.appendChild(hintBox(hint));
+      revealBtn.style.display = '';
     });
 
     revealBtn.addEventListener('click', () => {
       field.setValue(ch.originalCode);
       lockAfterSolve();
-      showSolved(host, ch, false);
+      showSolved(host2, ch, false);
     });
 
     runBtn.addEventListener('click', async () => {
-      runBtn.textContent = '⏳ Running…';
+      runBtn.textContent = 'Running…';
       runBtn.disabled = true;
       outArea.innerHTML = '';
       try {
         const res = await verifyCode(field.getValue(), ch);
         if (res.correct) {
-          // Keep runBtn visible so the success burst can originate from it
-          // (advance() re-renders the step immediately afterwards).
-          outArea.appendChild(renderOutput(res.output, true));
-          showSolved(host, ch, true, runBtn, firstTry);
+          outArea.appendChild(outputPanel(res.output, 'Output'));
+          helpArea.innerHTML = '';
+          helpArea.appendChild(
+            correctBox(firstTry ? 'First try — excellent!' : 'Correct!')
+          );
+          showSolved(host2, ch, true, runBtn, firstTry);
           return;
         }
         firstTry = false;
-        outArea.appendChild(renderOutput(res.output, false));
-        // Show the "not correct" feedback in the same place + style as a hint, but red.
+        outArea.appendChild(outputPanel(res.output, 'Output'));
         helpArea.innerHTML = '';
         helpArea.appendChild(
           errorBox(
             res.errored
-              ? '❌ The cell raised an error — read the message above and try again.'
-              : '❌ Not quite — the output does not match yet. Try again or take a hint.'
+              ? 'The cell raised an error — read the message and try again.'
+              : "Run & check failed — the code doesn't do what the task asks yet."
           )
         );
+        if (revealedHints === 0 && app.difficultyBias <= 0) {
+          revealBtn.style.display = '';
+        }
       } catch {
         outArea.appendChild(infoBox('Failed to run the cell.', 'error'));
       } finally {
-        runBtn.textContent = isBug ? '▶ Run & check fix' : '▶ Run cell';
+        runBtn.textContent = isBug ? 'Run & check' : 'Run cell';
         runBtn.disabled = false;
       }
     });
   }
 
-  function renderOutput(text: string, ok: boolean): HTMLElement {
+  function outputPanel(text: string, label: string): HTMLElement {
     const wrap = document.createElement('div');
-    const lbl = document.createElement('div');
-    lbl.style.cssText =
-      'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;color:' +
-      (ok ? 'var(--nm-success-text)' : 'var(--nm-text-muted)');
-    lbl.textContent = ok ? 'Output ✓' : 'Output';
+    wrap.style.cssText =
+      'padding:10px 14px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:7px';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = `${CAPS_LABEL};font-size:10px;color:var(--text-quaternary);display:block;margin-bottom:6px`;
+    lbl.textContent = label;
     const pre = document.createElement('pre');
-    pre.style.cssText = [
-      'background:var(--nm-code-bg);color:var(--nm-code-text);padding:13px 15px;border-radius:var(--nm-radius)',
-      'font-family:var(--nm-font-mono);font-size:12px;line-height:1.5',
-      'overflow-x:auto;white-space:pre-wrap;margin:0;max-height:220px;overflow-y:auto',
-      `border-left:4px solid ${ok ? 'var(--nm-success)' : 'var(--nm-border-strong)'}`
-    ].join(';');
-    pre.textContent = text.trim() || '(no output)';
-    wrap.appendChild(lbl);
-    wrap.appendChild(pre);
-    return wrap;
-  }
-
-  function executedOutput(): HTMLElement {
-    const text = app.expectedOutputs[activeIndex] ?? '';
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin:14px 0';
-    const lbl = document.createElement('div');
-    lbl.style.cssText =
-      'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;color:var(--nm-text-muted)';
-    lbl.textContent = 'Output — already executed';
-    const pre = document.createElement('pre');
-    pre.style.cssText = [
-      'background:var(--nm-code-bg);color:var(--nm-code-text);padding:13px 15px;border-radius:var(--nm-radius)',
-      'font-family:var(--nm-font-mono);font-size:12px;line-height:1.5',
-      'overflow-x:auto;white-space:pre-wrap;margin:0;max-height:220px;overflow-y:auto',
-      'border-left:4px solid var(--nm-accent)'
-    ].join(';');
+    pre.style.cssText =
+      'margin:0;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text-tertiary);white-space:pre-wrap;max-height:220px;overflow-y:auto';
     pre.textContent =
-      text.trim() ||
-      '(this cell renders a chart or produces no printed output)';
+      text.trim() || '(this cell renders a chart or produces no printed output)';
     wrap.appendChild(lbl);
     wrap.appendChild(pre);
     return wrap;
   }
 
   // ── Comprehension MC ("what does this code do?") ──────────────
-  function renderPredictMc(host: HTMLElement, ch: IChallenge): void {
-    host.appendChild(briefing(ch));
-    const code = makeCodeField(ch.originalCode, { readOnly: true });
-    host.appendChild(code.dom);
-    host.appendChild(executedOutput());
+  function renderPredictMc(host2: HTMLElement, ch: IChallenge): void {
+    host2.appendChild(briefing(ch));
 
-    const q = document.createElement('div');
+    const code = document.createElement('pre');
+    code.style.cssText =
+      'margin:0;padding:12px 14px;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:7px;overflow-x:auto;white-space:pre';
+    code.textContent = ch.originalCode;
+    host2.appendChild(code);
+
+    host2.appendChild(
+      outputPanel(app.expectedOutputs[activeIndex] ?? '', 'Output — already executed')
+    );
+
+    const panel = challengePanel(ch, 'Multiple choice');
+
+    const q = document.createElement('span');
     q.style.cssText =
-      'font-size:15px;font-weight:700;color:var(--nm-text);margin:16px 0 12px';
+      'font-size:13.5px;font-weight:500;line-height:1.5;color:var(--text-primary)';
     q.textContent = 'What does this code do?';
-    host.appendChild(q);
+    panel.appendChild(q);
 
     const opts = document.createElement('div');
-    opts.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+    opts.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+    const feedback = document.createElement('div');
     let done = false;
     let firstTry = true;
 
     (ch.options ?? []).forEach(opt => {
-      const b = document.createElement('button');
-      b.textContent = opt;
-      b.style.cssText = [
-        'padding:13px 16px;border:1px solid var(--nm-border);border-radius:var(--nm-radius)',
-        'background:#fff;text-align:left;font-size:14px;cursor:pointer',
-        'transition:all 0.16s;color:var(--nm-text);font-family:var(--nm-font)'
-      ].join(';');
-      b.addEventListener('mouseenter', () => {
-        if (!done) {
-          b.style.background = 'var(--nm-bg-subtle)';
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:7px;cursor:pointer;background:var(--bg-base);border:1px solid var(--border-subtle);transition:border-color var(--dur-fast) var(--ease-out)';
+      const dot = document.createElement('span');
+      dot.style.cssText =
+        'flex:0 0 auto;width:13px;height:13px;border-radius:50%;border:1.5px solid var(--border-strong)';
+      const lbl = document.createElement('span');
+      lbl.style.cssText = 'font-size:13px;color:var(--text-primary);line-height:1.45';
+      lbl.textContent = opt;
+      row.appendChild(dot);
+      row.appendChild(lbl);
+
+      row.addEventListener('mouseenter', () => {
+        if (!done) row.style.borderColor = 'var(--border-strong)';
+      });
+      row.addEventListener('mouseleave', () => {
+        if (!done && !row.dataset.picked) {
+          row.style.borderColor = 'var(--border-subtle)';
         }
       });
-      b.addEventListener('mouseleave', () => {
-        if (!done) {
-          b.style.background = '#fff';
-        }
-      });
-      b.addEventListener('click', () => {
-        if (done) {
+      row.addEventListener('click', () => {
+        if (done || row.dataset.picked) {
           return;
         }
         if (mcCorrect(opt, ch.answer ?? '')) {
           done = true;
-          b.style.background = 'var(--nm-success-bg)';
-          b.style.borderColor = 'var(--nm-success)';
-          b.style.color = 'var(--nm-success-text)';
-          opts.querySelectorAll('button').forEach(x => {
-            (x as HTMLButtonElement).disabled = true;
-          });
-          showSolved(host, ch, true, b, firstTry);
+          row.dataset.picked = '1';
+          row.style.borderColor = 'var(--green-400)';
+          dot.style.cssText =
+            'flex:0 0 auto;width:13px;height:13px;border-radius:50%;border:1.5px solid var(--green-400);background:var(--green-400);box-shadow:inset 0 0 0 2.5px var(--bg-base)';
+          feedback.innerHTML = '';
+          feedback.appendChild(
+            correctBox(firstTry ? 'First try — excellent!' : 'Correct!')
+          );
+          showSolved(host2, ch, true, row, firstTry);
         } else {
           firstTry = false;
-          b.style.background = 'var(--nm-error-bg)';
-          b.style.borderColor = 'var(--nm-error)';
-          b.style.color = 'var(--nm-error-text)';
-          b.disabled = true;
+          row.dataset.picked = '1';
+          row.style.borderColor = 'var(--red-500)';
+          row.style.cursor = 'default';
+          feedback.innerHTML = '';
+          feedback.appendChild(
+            errorBox('Not quite — re-read the cell and its output, then try again.')
+          );
         }
       });
-      opts.appendChild(b);
+      opts.appendChild(row);
     });
-    host.appendChild(opts);
+    panel.appendChild(opts);
+    panel.appendChild(feedback);
+    host2.appendChild(panel);
   }
 
   // ── Preparation ───────────────────────────────────────────────
@@ -642,70 +591,86 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
 
     if (!kernelAvailable) {
       const warn = infoBox(
-        '⚠️ No Python kernel available. Code challenges will check your code against the reference instead of running it.',
+        'No Python kernel available. Code challenges will check your code against the reference instead of running it.',
         'warn'
       );
       warn.style.marginBottom = '16px';
-      root.insertBefore(warn, progressLabel);
+      root.insertBefore(warn, progressRow);
     }
 
     await activate(0);
   }
 
-  // ── Floating difficulty panel (bottom-right popup) ────────────
-  function buildDifficultyPanel(): void {
-    const panel = document.createElement('div');
-    panel.style.cssText = [
-      'position:fixed;bottom:20px;right:20px;z-index:9000;width:210px',
-      'background:#fff;border:1px solid var(--nm-border);border-radius:var(--nm-radius-lg)',
-      'box-shadow:var(--nm-shadow-lg);padding:13px 14px;font-family:var(--nm-font)'
-    ].join(';');
+  // ── Floating difficulty pill (bottom-right, prototype) ────────
+  function buildDifficultyPill(): void {
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed;bottom:20px;right:24px;z-index:200';
 
-    const title = document.createElement('div');
-    title.style.cssText =
-      'font-size:12px;font-weight:700;color:var(--nm-text);margin-bottom:2px';
-    title.textContent = '⚖️ Difficulty';
-    const help = document.createElement('div');
-    help.style.cssText =
-      'font-size:11.5px;color:var(--nm-text-muted);margin-bottom:10px;line-height:1.45';
-    help.textContent = 'Too easy or too hard? Tune upcoming steps to your level.';
+    const currentLabel = (): string =>
+      app.difficultyBias < 0 ? 'Easier' : app.difficultyBias > 0 ? 'Harder' : 'Normal';
 
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px';
-    const easier = button('😌 Easier', 'ghost');
-    const harder = button('🔥 Harder', 'secondary');
-    easier.style.flex = '1';
-    harder.style.flex = '1';
-    easier.style.padding = '7px 8px';
-    harder.style.padding = '7px 8px';
-
-    const status = document.createElement('div');
-    status.style.cssText =
-      'font-size:11px;color:var(--nm-text-secondary);margin-top:9px;text-align:center;font-weight:600';
-
-    const refresh = (): void => {
-      const b = app.difficultyBias;
-      status.textContent =
-        b < 0 ? '🟢 Easier mode on' : b > 0 ? '🔴 Harder mode on' : 'Balanced';
+    const paint = (open: boolean): void => {
+      holder.innerHTML = '';
+      if (!open) {
+        const chipEl = document.createElement('span');
+        chipEl.style.cssText =
+          'display:inline-flex;align-items:center;gap:7px;padding:8px 13px;background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,0.10);cursor:pointer;font-size:12px;font-weight:500;color:var(--text-secondary)';
+        chipEl.innerHTML =
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>' +
+          '<span>Difficulty</span><span style="color:var(--text-quaternary)">·</span>' +
+          `<span style="font-weight:600;color:var(--accent-text)">${currentLabel()}</span>`;
+        chipEl.addEventListener('mouseenter', () => {
+          chipEl.style.borderColor = 'var(--accent)';
+          chipEl.style.color = 'var(--text-primary)';
+        });
+        chipEl.addEventListener('mouseleave', () => {
+          chipEl.style.borderColor = 'var(--border-strong)';
+          chipEl.style.color = 'var(--text-secondary)';
+        });
+        chipEl.addEventListener('click', () => paint(true));
+        holder.appendChild(chipEl);
+        return;
+      }
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;align-items:center;gap:8px;padding:7px 8px 7px 12px;background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,0.10);animation:nm-rise 0.14s ease-out both';
+      const closeLbl = document.createElement('span');
+      closeLbl.style.cssText =
+        `display:inline-flex;align-items:center;gap:5px;${CAPS_LABEL};font-size:11px;color:var(--text-quaternary);cursor:pointer`;
+      closeLbl.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>Difficulty';
+      closeLbl.addEventListener('click', () => paint(false));
+      row.appendChild(closeLbl);
+      const optWrap = document.createElement('div');
+      optWrap.style.cssText = 'display:flex;gap:2px';
+      (
+        [
+          ['Easier', -1],
+          ['Normal', 0],
+          ['Harder', 1]
+        ] as Array<[string, number]>
+      ).forEach(([lbl, bias]) => {
+        const on =
+          (bias < 0 && app.difficultyBias < 0) ||
+          (bias === 0 && app.difficultyBias === 0) ||
+          (bias > 0 && app.difficultyBias > 0);
+        const opt = document.createElement('span');
+        opt.textContent = lbl;
+        opt.style.cssText =
+          'padding:4px 11px;border-radius:999px;font-size:12px;font-weight:500;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out);' +
+          (on ? 'background:var(--accent);color:#fff' : 'color:var(--text-tertiary)');
+        opt.addEventListener('click', () => {
+          app.difficultyBias = bias;
+          paint(true);
+        });
+        optWrap.appendChild(opt);
+      });
+      row.appendChild(optWrap);
+      holder.appendChild(row);
     };
-    refresh();
 
-    easier.addEventListener('click', () => {
-      app.difficultyBias = Math.max(-2, app.difficultyBias - 1);
-      refresh();
-    });
-    harder.addEventListener('click', () => {
-      app.difficultyBias = Math.min(2, app.difficultyBias + 1);
-      refresh();
-    });
-
-    row.appendChild(easier);
-    row.appendChild(harder);
-    panel.appendChild(title);
-    panel.appendChild(help);
-    panel.appendChild(row);
-    panel.appendChild(status);
-    root.appendChild(panel);
+    paint(false);
+    root.appendChild(holder);
   }
 
   // Build the full roadmap (all locked), then prepare + activate step 1.
@@ -713,36 +678,27 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     steps.push(buildStep(i));
   }
   updateProgress();
-  buildDifficultyPanel();
+  buildDifficultyPill();
   void prepare();
 }
 
-// Hint and "not correct" feedback share one style; only the colour differs.
-function calloutBox(text: string, rgb: string): HTMLElement {
+// ── Feedback boxes (prototype recipes) ──────────────────────────
+function hintBox(text: string): HTMLElement {
   const el = document.createElement('div');
-  el.style.cssText = [
-    `background:rgba(${rgb},0.12);border:1px solid rgba(${rgb},0.45)`,
-    'border-radius:var(--nm-radius);padding:11px 14px;font-size:13px;line-height:1.6;font-weight:500',
-    `color:rgb(${rgb})`
-  ].join(';');
-  el.textContent = text;
+  el.style.cssText =
+    'display:flex;align-items:flex-start;gap:8px;padding:8px 11px;border-radius:6px;background:var(--yellow-bg);border:1px solid rgba(178,125,32,0.28)';
+  el.innerHTML =
+    '<span style="font-size:11px;font-weight:600;color:var(--yellow-500);text-transform:uppercase;letter-spacing:0.05em;padding-top:1px">Hint</span>' +
+    `<span style="font-size:12.5px;color:var(--text-secondary);line-height:1.5">${text}</span>`;
   return el;
 }
 
-function hintBox(text: string): HTMLElement {
-  // Yellow.
-  const box = calloutBox(text, '161,98,7');
-  box.style.background = 'rgba(234,179,8,0.14)';
-  box.style.borderColor = 'rgba(202,138,4,0.5)';
-  return box;
-}
-
 function errorBox(text: string): HTMLElement {
-  // Red, same shape as the hint.
-  const box = calloutBox(text, '180,35,24');
-  box.style.background = 'rgba(217,45,32,0.10)';
-  box.style.borderColor = 'rgba(217,45,32,0.4)';
-  return box;
+  const el = document.createElement('div');
+  el.style.cssText =
+    'display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:6px;background:var(--red-bg);border:1px solid rgba(192,52,52,0.32)';
+  el.innerHTML = `<span style="font-size:12.5px;color:var(--red-400)">${text}</span>`;
+  return el;
 }
 
 function mcCorrect(selected: string, answer: string): boolean {
