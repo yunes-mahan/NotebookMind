@@ -94,7 +94,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       btn.textContent = '📓 NotebookMind';
       btn.title = 'Open NotebookMind';
       btn.style.cssText = [
-        'background:#FE7030;color:#fff;border:none;border-radius:7px',
+        'background:var(--nm-primary);color:#fff;border:none;border-radius:7px',
         'padding:5px 14px;font-size:13px;font-weight:700;cursor:pointer',
         'margin:3px 12px 3px auto;font-family:system-ui,sans-serif;',
         'display:inline-block;vertical-align:middle;flex-shrink:0'

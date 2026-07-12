@@ -55,6 +55,27 @@ export const COURSE: ICourse = {
       topics: ['Correlation', 'matplotlib', 'Reading charts'],
       slides: { pdf: 'materials/lecture_w3.pdf', label: 'Week 3 slides' },
       notebookIds: ['nb-correlation', 'nb-plotting']
+    },
+    {
+      week: 4,
+      theme: 'Cleaning real-world data',
+      topics: ['Missing values', 'Outliers', 'Data types'],
+      slides: { pdf: 'materials/lecture_w4.pdf', label: 'Week 4 slides' },
+      notebookIds: ['nb-cleaning']
+    },
+    {
+      week: 5,
+      theme: 'A first model: linear regression',
+      topics: ['Train/test split', 'Fitting', 'Leakage'],
+      slides: { pdf: 'materials/lecture_w5.pdf', label: 'Week 5 slides' },
+      notebookIds: ['nb-model']
+    },
+    {
+      week: 6,
+      theme: 'Evaluation & communication',
+      topics: ['Metrics', 'Residuals', 'Reporting'],
+      slides: { pdf: 'materials/lecture_w6.pdf', label: 'Week 6 slides' },
+      notebookIds: ['nb-evaluation']
     }
   ],
   notebooks: {
@@ -113,6 +134,33 @@ export const COURSE: ICourse = {
       week: 3,
       status: 'locked',
       deps: ['nb-students', 'nb-eda']
+    },
+    'nb-cleaning': {
+      id: 'nb-cleaning',
+      title: 'Cleaning messy sales data',
+      topic: 'Data cleaning',
+      blurb: 'Missing values, broken types and outliers on a real export.',
+      week: 4,
+      status: 'locked',
+      deps: ['nb-eda']
+    },
+    'nb-model': {
+      id: 'nb-model',
+      title: 'Predicting exam scores',
+      topic: 'Regression',
+      blurb: 'Train/test split, fitting a line and avoiding leakage.',
+      week: 5,
+      status: 'locked',
+      deps: ['nb-correlation', 'nb-cleaning']
+    },
+    'nb-evaluation': {
+      id: 'nb-evaluation',
+      title: 'Evaluating the model',
+      topic: 'Evaluation',
+      blurb: 'Metrics, residual plots and communicating results honestly.',
+      week: 6,
+      status: 'locked',
+      deps: ['nb-model']
     }
   }
 };
@@ -124,7 +172,10 @@ export const COURSE_FLOW: string[] = [
   'nb-students',
   'nb-eda',
   'nb-correlation',
-  'nb-plotting'
+  'nb-plotting',
+  'nb-cleaning',
+  'nb-model',
+  'nb-evaluation'
 ];
 
 export function coursePercent(): number {
@@ -138,6 +189,6 @@ export const STATUS_META: Record<
   { icon: string; color: string; label: string }
 > = {
   done: { icon: '✓', color: '#1F8A5B', label: 'Completed' },
-  available: { icon: '▶', color: '#FE7030', label: 'Unlocked' },
-  locked: { icon: '🔒', color: '#8A8780', label: 'Locked' }
+  available: { icon: '▶', color: 'var(--nm-primary)', label: 'Unlocked' },
+  locked: { icon: '🔒', color: 'var(--nm-fg-subtle)', label: 'Locked' }
 };

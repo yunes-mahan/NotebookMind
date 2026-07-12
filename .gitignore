@@ -137,3 +137,4 @@ run-migration2.js
 # Unrelated bundled project / archives
 file-to-web-app-generator-main/
 *.zip
+venv/

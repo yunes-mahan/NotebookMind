@@ -10,7 +10,7 @@ export function renderFlashcardTab(
 
   if (!cellSource.trim()) {
     container.innerHTML =
-      '<div style="color:#6B7280;text-align:center;padding:32px;font-size:14px">Click a code cell to generate flashcards.</div>';
+      '<div style="color:var(--nm-fg-muted);text-align:center;padding:32px;font-size:14px">Click a code cell to generate flashcards.</div>';
     return;
   }
 
@@ -21,12 +21,12 @@ export function renderFlashcardTab(
   const genBtn = document.createElement('button');
   genBtn.textContent = 'Generate Flashcards';
   genBtn.style.cssText = [
-    'width:100%;padding:12px;background:#7C3AED;color:white;border:none',
+    'width:100%;padding:12px;background:var(--nm-primary);color:white;border:none',
     'border-radius:10px;font-size:15px;font-weight:600;cursor:pointer',
     'margin-bottom:20px;transition:background 0.2s'
   ].join(';');
-  genBtn.addEventListener('mouseenter', () => { genBtn.style.background = '#6D28D9'; });
-  genBtn.addEventListener('mouseleave', () => { genBtn.style.background = '#7C3AED'; });
+  genBtn.addEventListener('mouseenter', () => { genBtn.style.background = 'var(--nm-primary-hover)'; });
+  genBtn.addEventListener('mouseleave', () => { genBtn.style.background = 'var(--nm-primary)'; });
 
   const flashArea = document.createElement('div');
 
@@ -34,7 +34,7 @@ export function renderFlashcardTab(
     genBtn.textContent = 'Generating...';
     genBtn.disabled = true;
     flashArea.innerHTML =
-      '<div style="color:#6B7280;text-align:center;padding:24px">🃏 Creating flashcards...</div>';
+      '<div style="color:var(--nm-fg-muted);text-align:center;padding:24px">🃏 Creating flashcards...</div>';
 
     try {
       cards = await onGenerate();
@@ -43,7 +43,7 @@ export function renderFlashcardTab(
       renderCard();
     } catch {
       flashArea.innerHTML =
-        '<div style="color:#EF4444;padding:12px;border-radius:8px;background:#FEE2E2">Failed to generate flashcards.</div>';
+        '<div style="color:var(--nm-danger);padding:12px;border-radius:8px;background:var(--nm-danger-soft)">Failed to generate flashcards.</div>';
     } finally {
       genBtn.textContent = 'Regenerate';
       genBtn.disabled = false;
@@ -59,7 +59,7 @@ export function renderFlashcardTab(
 
     const progress = document.createElement('div');
     progress.style.cssText =
-      'text-align:center;font-size:13px;color:#6B7280;margin-bottom:12px;font-weight:500';
+      'text-align:center;font-size:13px;color:var(--nm-fg-muted);margin-bottom:12px;font-weight:500';
     progress.textContent = `Card ${index + 1} of ${cards.length}`;
 
     // Flip card wrapper
@@ -84,7 +84,7 @@ export function renderFlashcardTab(
     front.className = 'nm-card-face';
     front.style.cssText = [
       'position:absolute;width:100%;min-height:170px',
-      'background:linear-gradient(135deg,#7C3AED 0%,#5B21B6 100%)',
+      'background:linear-gradient(135deg,var(--nm-primary) 0%,var(--nm-primary-hover) 100%)',
       'border-radius:14px;display:flex;align-items:center;justify-content:center',
       'padding:24px;box-sizing:border-box'
     ].join(';');
@@ -98,13 +98,13 @@ export function renderFlashcardTab(
     back.className = 'nm-card-face';
     back.style.cssText = [
       'position:absolute;width:100%;min-height:170px;transform:rotateY(180deg)',
-      'background:#FFFFFF;border-radius:14px;border:2px solid #7C3AED',
+      'background:#FFFFFF;border-radius:14px;border:2px solid var(--nm-primary)',
       'display:flex;align-items:center;justify-content:center',
       'padding:24px;box-sizing:border-box'
     ].join(';');
     const backText = document.createElement('div');
     backText.style.cssText =
-      'color:#1F2937;font-size:14px;text-align:center;line-height:1.6';
+      'color:var(--nm-fg);font-size:14px;text-align:center;line-height:1.6';
     backText.textContent = cards[index].back;
     back.appendChild(backText);
 
@@ -114,7 +114,7 @@ export function renderFlashcardTab(
 
     const hint = document.createElement('div');
     hint.style.cssText =
-      'text-align:center;font-size:11px;color:#9CA3AF;margin-top:4px;margin-bottom:12px';
+      'text-align:center;font-size:11px;color:var(--nm-fg-subtle);margin-top:4px;margin-bottom:12px';
     hint.textContent = 'Click card to flip';
 
     wrapper.addEventListener('click', () => {
@@ -131,9 +131,9 @@ export function renderFlashcardTab(
     ratingRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px';
 
     const ratings = [
-      { label: '😕 Hard', pts: 0, color: '#EF4444' },
-      { label: '😐 Okay', pts: 1, color: '#F59E0B' },
-      { label: '😊 Easy', pts: FLASHCARD_EASY, color: '#10B981' }
+      { label: '😕 Hard', pts: 0, color: 'var(--nm-danger)' },
+      { label: '😐 Okay', pts: 1, color: 'var(--nm-warning)' },
+      { label: '😊 Easy', pts: FLASHCARD_EASY, color: 'var(--nm-success)' }
     ];
 
     ratings.forEach(r => {
@@ -144,7 +144,7 @@ export function renderFlashcardTab(
         `background:#FFFFFF;color:${r.color};font-size:13px;cursor:pointer;font-weight:500`,
         'transition:background 0.15s'
       ].join(';');
-      rb.addEventListener('mouseenter', () => { rb.style.background = '#F9FAFB'; });
+      rb.addEventListener('mouseenter', () => { rb.style.background = 'var(--nm-bg-elev-2)'; });
       rb.addEventListener('mouseleave', () => { rb.style.background = '#FFFFFF'; });
       rb.addEventListener('click', () => {
         if (r.pts > 0) { pointsEngine.addPoints(r.pts, 'flashcard-rating'); }
@@ -156,8 +156,8 @@ export function renderFlashcardTab(
           flashArea.innerHTML = [
             '<div style="text-align:center;padding:36px">',
             '<div style="font-size:48px;margin-bottom:14px">🎉</div>',
-            '<div style="font-size:18px;font-weight:700;color:#7C3AED">Deck complete!</div>',
-            '<div style="font-size:14px;color:#6B7280;margin-top:8px">Click Regenerate for a fresh set</div>',
+            '<div style="font-size:18px;font-weight:700;color:var(--nm-primary)">Deck complete!</div>',
+            '<div style="font-size:14px;color:var(--nm-fg-muted);margin-top:8px">Click Regenerate for a fresh set</div>',
             '</div>'
           ].join('');
         }
@@ -169,8 +169,8 @@ export function renderFlashcardTab(
     const navRow = document.createElement('div');
     navRow.style.cssText = 'display:flex;gap:8px';
     const navStyle = [
-      'flex:1;padding:9px;border:1.5px solid #E5E7EB;border-radius:8px',
-      'background:#FFFFFF;color:#6B7280;font-size:13px;cursor:pointer;transition:background 0.15s'
+      'flex:1;padding:9px;border:1.5px solid var(--nm-border);border-radius:8px',
+      'background:#FFFFFF;color:var(--nm-fg-muted);font-size:13px;cursor:pointer;transition:background 0.15s'
     ].join(';');
 
     const prevBtn = document.createElement('button');

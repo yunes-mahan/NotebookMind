@@ -13,6 +13,16 @@ export class PointsEngine {
     return this._total;
   }
 
+  /** Wipe the local XP counter (sign-out / delete account). */
+  reset(): void {
+    this._total = 0;
+    document.dispatchEvent(
+      new CustomEvent('notebookmind:points', {
+        detail: { total: 0, delta: 0, reason: 'reset' }
+      })
+    );
+  }
+
   addPoints(amount: number, reason: string): void {
     this._total += amount;
     dbAddPoints(amount, reason).catch(() => null);
@@ -24,34 +34,22 @@ export class PointsEngine {
     this._showToast(amount);
   }
 
+  /** Prototype celebration chip (single instance — richer labels may replace it). */
   private _showToast(amount: number): void {
-    if (!document.querySelector('#nm-toast-style')) {
-      const style = document.createElement('style');
-      style.id = 'nm-toast-style';
-      style.textContent =
-        '@keyframes nmFadeOut{0%{opacity:1;transform:translateY(0)}70%{opacity:1;transform:translateY(-6px)}100%{opacity:0;transform:translateY(-12px)}}';
-      document.head.appendChild(style);
-    }
-    const toast = document.createElement('div');
-    toast.textContent = `+${amount} XP`;
-    Object.assign(toast.style, {
-      position: 'fixed',
-      top: '80px',
-      right: '24px',
-      zIndex: '9999',
-      background: 'var(--nm-accent, #2A6FDB)',
-      color: 'white',
-      padding: '8px 16px',
-      borderRadius: '9999px',
-      fontWeight: '600',
-      fontSize: '14px',
-      fontFamily: 'var(--nm-font-sans, var(--nm-font, system-ui, sans-serif))',
-      boxShadow: '0 8px 24px rgba(15,15,12,0.10), 0 2px 4px rgba(15,15,12,0.05)',
-      animation: 'nmFadeOut 2s forwards',
-      pointerEvents: 'none'
-    });
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2000);
+    const existing = document.getElementById('nm-celebrate-chip');
+    if (existing) existing.remove();
+    const chip = document.createElement('div');
+    chip.id = 'nm-celebrate-chip';
+    chip.textContent = `+${amount} XP`;
+    chip.style.cssText = [
+      'position:fixed;top:60px;right:24px;z-index:3000;padding:8px 14px;border-radius:9999px',
+      'background:var(--surface-card);border:1px solid rgba(94,106,210,0.5);color:var(--accent-text)',
+      'font-size:13px;font-weight:600;font-family:var(--font-sans)',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.10), 0 0 12px var(--brand-glow)',
+      'animation:nm-pop 1.4s var(--ease-out) both;pointer-events:none'
+    ].join(';');
+    document.body.appendChild(chip);
+    setTimeout(() => chip.remove(), 1500);
   }
 }
 

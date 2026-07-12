@@ -1,116 +1,230 @@
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,450;14..32,500;14..32,510;14..32,590;14..32,680;14..32,700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /*
-  NotebookMind — Design System tokens (from "NotebookMind Design System").
-  Visual idiom inspired by attio.com: warm neutrals, one brand blue,
-  black primary buttons, Geist + Geist Mono, subtle layered shadows.
+  NotebookMind — design tokens ported 1:1 from the Claude Design handoff
+  ("NotebookMind v2.dc.html", Linear design system, light theme).
+  Two namespaces:
+    · prototype names (--bg-app, --accent-text, --alpha-6 …) — used verbatim
+      when porting prototype markup;
+    · legacy --nm-* aliases — keep every existing screen on the same palette.
 */
 
 :root {
-  /* Neutrals (warm gray) */
-  --nm-bg: #fafaf7;
-  --nm-bg-elev-1: #ffffff;
-  --nm-bg-elev-2: #f4f3ef;
-  --nm-bg-inverse: #0e0e0c;
+  color-scheme: light;
 
-  --nm-fg: #18181b;
-  --nm-fg-strong: #0a0a0a;
-  --nm-fg-muted: #57534e;
-  --nm-fg-subtle: #8a8780;
+  /* ── Surfaces ── */
+  --bg-app: #f9f9fb;
+  --bg-base: #f2f3f5;
+  --bg-panel: #ffffff;
+  --bg-elevated: #ffffff;
+  --surface-card: #ffffff;
+  --surface-input: #ffffff;
+  --surface-hover: #f0f1f3;
+  --surface-active: #e8e9ec;
+  --surface-overlay: rgba(24, 25, 32, 0.35);
 
-  --nm-border: #e7e5e0;
-  --nm-border-strong: #d6d3cd;
+  /* ── Borders ── */
+  --border-subtle: rgba(20, 22, 32, 0.07);
+  --border-default: rgba(20, 22, 32, 0.11);
+  --border-strong: rgba(20, 22, 32, 0.2);
 
-  /* Brand palette — primary orange, secondary pale green, accent olive */
-  --nm-primary: #fe7030;
-  --nm-primary-hover: #ec5f22;
-  --nm-secondary: #dee5b9;
-  --nm-secondary-hover: #d2dba6;
-  --nm-secondary-fg: #3a3f28;
+  /* ── Text ── */
+  --text-primary: #17181c;
+  --text-secondary: #44474e;
+  --text-tertiary: #6e7178;
+  --text-quaternary: #989ba3;
+  --text-onbrand: #ffffff;
 
-  --nm-accent: #515839;
-  --nm-accent-hover: #3f4530;
-  --nm-accent-soft: #e9edd9;
+  /* ── Grays (light overrides) ── */
+  --gray-800: #e6e7ea;
+  --gray-700: #d7d9de;
+
+  /* ── Brand (indigo) ── */
+  --brand-100: #e8e9fb;
+  --brand-200: #c5c9f4;
+  --brand-300: #4a50c4; /* light-mode override: darker text-blue */
+  --brand-400: #7c82e0;
+  --brand-500: #5e6ad2;
+  --brand-600: #545bc4;
+  --brand-700: #4c4fb8;
+  --brand-800: #3d3f94;
+  --brand-glow: rgba(94, 106, 210, 0.22);
+
+  --accent: #5e6ad2;
+  --accent-hover: #7c82e0;
+  --accent-active: #545bc4;
+  --accent-text: #4a50c4;
+  --accent-subtle-bg: rgba(94, 106, 210, 0.1);
+
+  /* ── Semantic ── */
+  --green-bg: rgba(23, 138, 84, 0.1);
+  --green-400: #177a4e;
+  --green-500: #1b9e63;
+  --red-bg: rgba(197, 52, 52, 0.08);
+  --red-400: #c03434;
+  --red-500: #c03434;
+  --yellow-bg: rgba(178, 125, 32, 0.1);
+  --yellow-500: #9a6700;
+
+  /* ── Status glyph colors (Linear StatusIcon) ── */
+  --status-backlog: #6c6f78;
+  --status-unstarted: #8a8f98;
+  --status-started: #f2c94c;
+  --status-inreview: #4ea7fc;
+  --status-done: #5e6ad2;
+
+  /* ── Black alphas ── */
+  --alpha-4: rgba(0, 0, 0, 0.03);
+  --alpha-6: rgba(0, 0, 0, 0.045);
+  --alpha-8: rgba(0, 0, 0, 0.06);
+  --alpha-10: rgba(0, 0, 0, 0.08);
+  --alpha-14: rgba(0, 0, 0, 0.12);
+  --alpha-20: rgba(0, 0, 0, 0.18);
+
+  /* ── Type ── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    monospace;
+
+  /* ── Controls / radius / motion ── */
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 38px;
+  --radius-control: 6px;
+  --shadow-brand: 0 2px 12px var(--brand-glow);
+  --ring: 0 0 0 1px var(--brand-500), 0 0 0 4px var(--brand-glow);
+  --dur-fast: 100ms;
+  --dur-quick: 160ms;
+  --dur-base: 220ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ════════ Legacy --nm-* aliases (existing screens) ════════ */
+  --nm-bg: var(--bg-app);
+  --nm-bg-elev-1: var(--bg-panel);
+  --nm-bg-elev-2: var(--bg-base);
+  --nm-bg-inverse: #17181c;
+
+  --nm-fg: var(--text-primary);
+  --nm-fg-strong: var(--text-primary);
+  --nm-fg-muted: var(--text-secondary);
+  --nm-fg-subtle: var(--text-tertiary);
+
+  --nm-border: var(--border-default);
+  --nm-border-strong: var(--border-strong);
+
+  --nm-primary: var(--accent);
+  --nm-primary-hover: var(--accent-hover);
+  --nm-secondary: var(--alpha-6);
+  --nm-secondary-hover: var(--alpha-10);
+  --nm-secondary-fg: var(--text-primary);
+
+  --nm-accent: var(--accent);
+  --nm-accent-hover: var(--accent-text);
+  --nm-accent-soft: var(--accent-subtle-bg);
   --nm-accent-fg: #ffffff;
 
-  /* Object-tag palette (low saturation) */
-  --nm-tag-rose: #c6435d;
-  --nm-tag-orange: #c9633a;
-  --nm-tag-amber: #b27b1f;
-  --nm-tag-lime: #5f8b27;
-  --nm-tag-teal: #1f857d;
-  --nm-tag-violet: #6b4fcf;
-  --nm-tag-pink: #b83b8c;
-  --nm-tag-slate: #4b5563;
+  --nm-success: var(--green-500);
+  --nm-success-soft: var(--green-bg);
+  --nm-warning: var(--yellow-500);
+  --nm-warning-soft: var(--yellow-bg);
+  --nm-danger: var(--red-500);
+  --nm-danger-soft: var(--red-bg);
+  --nm-info: var(--accent);
+  --nm-info-soft: var(--accent-subtle-bg);
 
-  /* Semantic */
-  --nm-success: #1f8a5b;
-  --nm-success-soft: #dcf0e5;
-  --nm-warning: #b27b1f;
-  --nm-warning-soft: #faf1d6;
-  --nm-danger: #c6435d;
-  --nm-danger-soft: #fce7ec;
-  --nm-info: #2a6fdb;
-  --nm-info-soft: #e8f0fc;
+  --nm-font-sans: var(--font-sans);
+  --nm-font-mono: var(--font-mono);
 
-  /* Type */
-  --nm-font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
-    Helvetica, Arial, sans-serif;
-  --nm-font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-
-  /* Radii */
-  --nm-radius-sm: 5px;
+  --nm-radius-sm: 6px;
   --nm-radius-md: 8px;
-  --nm-radius-lg: 12px;
-  --nm-radius-xl: 16px;
-  --nm-radius-2xl: 24px;
+  --nm-radius-lg: 10px;
+  --nm-radius-xl: 12px;
+  --nm-radius-2xl: 16px;
   --nm-radius-pill: 9999px;
 
-  /* Shadows (subtle, layered — never colored glows) */
-  --nm-shadow-xs: 0 1px 1px rgba(15, 15, 12, 0.04);
-  --nm-shadow-sm: 0 1px 2px rgba(15, 15, 12, 0.05), 0 1px 1px rgba(15, 15, 12, 0.03);
-  --nm-shadow-md: 0 2px 4px rgba(15, 15, 12, 0.04), 0 4px 12px rgba(15, 15, 12, 0.05);
-  --nm-shadow-lg: 0 8px 24px rgba(15, 15, 12, 0.07), 0 2px 4px rgba(15, 15, 12, 0.04);
-  --nm-shadow-pop: 0 12px 32px rgba(15, 15, 12, 0.14), 0 2px 4px rgba(15, 15, 12, 0.06);
+  --nm-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --nm-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 1px var(--border-default);
+  --nm-shadow-md: 0 6px 24px rgba(0, 0, 0, 0.1);
+  --nm-shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.13);
+  --nm-shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.14);
 
-  /* Motion */
-  --nm-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --nm-ease: var(--ease-out);
 
-  /* ── Legacy aliases used throughout the extension's inline styles ───── */
-  --nm-font: var(--nm-font-sans);
-  --nm-surface: var(--nm-bg-elev-1);
-  --nm-bg-subtle: var(--nm-bg-elev-2);
-  --nm-bg-section: #eeede8;
+  /* ── Older aliases still referenced in screens ───── */
+  --nm-font: var(--font-sans);
+  --nm-surface: var(--surface-card);
+  --nm-bg-subtle: var(--bg-base);
+  --nm-bg-section: var(--surface-hover);
 
-  --nm-text: var(--nm-fg);
-  --nm-text-secondary: var(--nm-fg-muted);
-  --nm-text-muted: #6b6862;
-  --nm-text-faint: var(--nm-fg-subtle);
+  --nm-text: var(--text-primary);
+  --nm-text-secondary: var(--text-secondary);
+  --nm-text-muted: var(--text-tertiary);
+  --nm-text-faint: var(--text-quaternary);
 
-  --nm-border-subtle: #efede9;
+  --nm-border-subtle: var(--border-subtle);
 
-  --nm-accent-light: var(--nm-accent-soft);
-  --nm-accent-border: #c6cf9f;
-  --nm-navy: var(--nm-bg-inverse);
+  --nm-accent-light: var(--accent-subtle-bg);
+  --nm-accent-border: rgba(94, 106, 210, 0.45);
+  --nm-navy: #17181c;
 
-  --nm-radius: var(--nm-radius-md);
+  --nm-radius: 8px;
 
-  --nm-success-bg: var(--nm-success-soft);
-  --nm-success-text: #146647;
-  --nm-error: var(--nm-danger);
-  --nm-error-bg: var(--nm-danger-soft);
-  --nm-error-text: #9b2f45;
-  --nm-warn: var(--nm-warning);
-  --nm-warn-bg: var(--nm-warning-soft);
-  --nm-warn-text: #855b16;
+  --nm-success-bg: var(--green-bg);
+  --nm-success-text: var(--green-400);
+  --nm-error: var(--red-500);
+  --nm-error-bg: var(--red-bg);
+  --nm-error-text: var(--red-400);
+  --nm-warn: var(--yellow-500);
+  --nm-warn-bg: var(--yellow-bg);
+  --nm-warn-text: var(--yellow-500);
 
-  --nm-code-bg: var(--nm-bg-elev-2);
-  --nm-code-text: var(--nm-fg);
-  --nm-code-border: var(--nm-border);
+  --nm-code-bg: var(--bg-base);
+  --nm-code-text: var(--text-secondary);
+  --nm-code-border: var(--border-subtle);
 
-  /* Primary action color (orange) */
-  --nm-btn-primary: var(--nm-primary);
-  --nm-btn-primary-hover: var(--nm-primary-hover);
+  --nm-btn-primary: var(--accent);
+  --nm-btn-primary-hover: var(--accent-hover);
+
+  --nm-overlay: var(--surface-overlay);
+}
+
+/* ── Shared animations (from the prototype) ── */
+@keyframes nm-pop {
+  0% {
+    transform: translateY(8px) scale(0.9);
+    opacity: 0;
+  }
+  18% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+}
+@keyframes nm-rise {
+  from {
+    transform: translateY(5px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes nm-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -118,95 +232,98 @@
    :root:root raises specificity so we win over the bundled light theme.
    ────────────────────────────────────────────────────────────────────────── */
 :root:root {
-  --jp-ui-font-family: var(--nm-font-sans);
-  --jp-content-font-family: var(--nm-font-sans);
-  --jp-code-font-family: var(--nm-font-mono);
+  --jp-ui-font-family: var(--font-sans);
+  --jp-content-font-family: var(--font-sans);
+  --jp-code-font-family: var(--font-mono);
 
-  --jp-ui-font-color0: var(--nm-fg-strong);
-  --jp-ui-font-color1: var(--nm-fg);
-  --jp-ui-font-color2: var(--nm-fg-muted);
-  --jp-ui-font-color3: var(--nm-fg-subtle);
+  --jp-ui-font-color0: var(--text-primary);
+  --jp-ui-font-color1: var(--text-primary);
+  --jp-ui-font-color2: var(--text-secondary);
+  --jp-ui-font-color3: var(--text-tertiary);
 
-  --jp-content-font-color0: var(--nm-fg-strong);
-  --jp-content-font-color1: var(--nm-fg);
-  --jp-content-font-color2: var(--nm-fg-muted);
-  --jp-content-font-color3: var(--nm-fg-subtle);
+  --jp-content-font-color0: var(--text-primary);
+  --jp-content-font-color1: var(--text-primary);
+  --jp-content-font-color2: var(--text-secondary);
+  --jp-content-font-color3: var(--text-tertiary);
 
   --jp-layout-color0: #ffffff;
   --jp-layout-color1: #ffffff;
-  --jp-layout-color2: var(--nm-bg-elev-2);
-  --jp-layout-color3: #eeede8;
-  --jp-layout-color4: var(--nm-border);
+  --jp-layout-color2: var(--bg-base);
+  --jp-layout-color3: var(--surface-hover);
+  --jp-layout-color4: var(--border-default);
 
-  --jp-border-color0: var(--nm-border-strong);
-  --jp-border-color1: var(--nm-border);
-  --jp-border-color2: var(--nm-border-subtle);
-  --jp-border-color3: var(--nm-bg-elev-2);
+  --jp-border-color0: var(--border-strong);
+  --jp-border-color1: var(--border-default);
+  --jp-border-color2: var(--border-subtle);
+  --jp-border-color3: var(--bg-base);
 
-  --jp-brand-color0: var(--nm-accent-hover);
-  --jp-brand-color1: var(--nm-accent);
-  --jp-brand-color2: #8a8780;
-  --jp-brand-color3: var(--nm-accent-border);
-  --jp-brand-color4: var(--nm-accent-soft);
-  --jp-accent-color1: var(--nm-accent);
+  --jp-brand-color0: var(--brand-600);
+  --jp-brand-color1: var(--accent);
+  --jp-brand-color2: var(--brand-400);
+  --jp-brand-color3: var(--brand-200);
+  --jp-brand-color4: var(--brand-100);
+  --jp-accent-color1: var(--accent);
 
   --jp-toolbar-background: #ffffff;
-  --jp-toolbar-border-color: var(--nm-border);
+  --jp-toolbar-border-color: var(--border-default);
 
-  --jp-cell-editor-background: var(--nm-bg-elev-2);
-  --jp-cell-editor-border-color: var(--nm-border);
-  --jp-cell-prompt-not-active-font-color: var(--nm-fg-subtle);
+  --jp-cell-editor-background: var(--bg-base);
+  --jp-cell-editor-border-color: var(--border-default);
+  --jp-cell-prompt-not-active-font-color: var(--text-quaternary);
 
-  --jp-input-active-border-color: var(--nm-accent);
-  --jp-input-hover-border-color: var(--nm-border-strong);
+  --jp-input-active-border-color: var(--accent);
+  --jp-input-hover-border-color: var(--border-strong);
 
   --jp-sidebar-min-width: 220px;
 }
 
 /* Gentle chrome polish */
 body {
-  font-family: var(--nm-font-sans);
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
 }
 
 #main,
 .jp-LabShell {
-  background: var(--nm-bg);
+  background: var(--bg-app);
 }
 
 #jp-top-panel,
 .jp-MenuBar,
 .lm-MenuBar {
   background: #ffffff;
-  border-bottom: 1px solid var(--nm-border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .jp-SideBar {
-  background: var(--nm-bg-elev-2);
+  background: var(--bg-base);
 }
 
 .jp-Toolbar {
-  border-bottom: 1px solid var(--nm-border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .jp-Button,
 .jp-mod-styled,
 button.bp3-button {
-  border-radius: var(--nm-radius-md);
+  border-radius: 6px;
 }
 
 .jp-DirListing-item {
-  border-radius: var(--nm-radius-sm);
+  border-radius: 6px;
 }
 
 .jp-DirListing-item.jp-mod-selected {
-  background: var(--nm-accent-soft);
-  color: var(--nm-fg);
+  background: var(--accent-subtle-bg);
+  color: var(--text-primary);
 }
 
 .jp-LauncherCard {
-  border-radius: var(--nm-radius-md);
+  border-radius: 8px;
 }
 
 .nm-app {
-  font-family: var(--nm-font-sans);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: -0.011em;
 }
