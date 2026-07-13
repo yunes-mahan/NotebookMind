@@ -6,12 +6,20 @@ import { KernelRunner } from './kernelRunner';
 import { XpSession } from './xp';
 import { IChallenge } from './challenge';
 import { pointsEngine } from './points';
-import { button, avatar } from './uiKit';
+import { button, avatar, logoSvg } from './uiKit';
 import { profile, clearUser, invited, MATES } from './friendsData';
-import { activeCourse } from './courseStore';
+import {
+  activeCourse,
+  allCourses,
+  setActiveCourse,
+  leaveCourse,
+  deleteCourse
+} from './courseStore';
 import { LoginWidget } from './auth';
+import { openProfileModal } from './profileModal';
+import { openOnboarding } from './onboarding';
 
-import { renderHome } from './screenHome';
+import { renderHome, openCourseModal } from './screenHome';
 import { renderLibrary } from './screenLibrary';
 import { renderSession } from './screenSession';
 import { renderExplain } from './screenExplain';
@@ -21,7 +29,7 @@ import { renderBoard } from './screenBoard';
 import { renderFriends } from './screenFriends';
 import { renderCourseMap } from './screenCourseMap';
 import { renderTeacher } from './screenTeacher';
-import { renderReader, loadReaderWithPages } from './screenReader';
+import { renderReader, loadReaderWithPages, showReaderShortcuts } from './screenReader';
 import { IPageData } from './pdfExtract';
 
 export type Screen =
@@ -118,6 +126,8 @@ export class NotebookMindApp extends Widget {
   private _ptsBadge!: HTMLElement;
   private _readerTitle = 'Reader';
   private _foot!: HTMLElement;
+  private _courseSlot!: HTMLElement;
+  private _teachSection!: HTMLElement;
   private readonly _navBtns: Record<string, HTMLElement> = {};
 
   constructor(services: ServiceManager.IManager) {
@@ -132,6 +142,14 @@ export class NotebookMindApp extends Widget {
     this._build();
     this._bindEvents();
     this.navigate('home');
+    this.maybeOnboard();
+  }
+
+  /** First-run: prompt students to join / teachers to create a course. */
+  maybeOnboard(): void {
+    if (profile.signedIn && !profile.onboarded) {
+      openOnboarding(this);
+    }
   }
 
   get screen(): Screen {
@@ -148,6 +166,9 @@ export class NotebookMindApp extends Widget {
       'flex:1;overflow-y:auto;min-height:0;padding:32px 28px';
     this._actions.innerHTML = '';
     this._setActiveNav(SCREEN_NAV[screen]);
+    if (this._courseSlot) {
+      this._paintCourseSwitcher();
+    }
     this._updateCrumb();
 
     switch (screen) {
@@ -200,6 +221,12 @@ export class NotebookMindApp extends Widget {
     this._actions.innerHTML = '';
     this._setActiveNav('slides');
     this._updateCrumb();
+    // Shortcuts lives in the topbar row (same layer as the breadcrumb).
+    const kb = button('Shortcuts', 'ghost');
+    kb.style.height = 'var(--control-sm)';
+    kb.style.fontSize = '12px';
+    kb.addEventListener('click', () => showReaderShortcuts());
+    this._actions.appendChild(kb);
     loadReaderWithPages(pages, title, docId, notes);
     renderReader(this._content, () => this.navigate('library'));
   }
@@ -263,10 +290,16 @@ export class NotebookMindApp extends Widget {
       'display:flex;align-items:center;gap:8px;padding:16px 16px 14px';
     brand.innerHTML =
       '<div style="width:22px;height:22px;border-radius:6px;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 6px var(--brand-glow)">' +
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>' +
+      logoSvg(12) +
       '</div>' +
       '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">NotebookMind</span>';
     bar.appendChild(brand);
+
+    // Course switcher (global: switch · join · create) — always visible
+    this._courseSlot = document.createElement('div');
+    this._courseSlot.style.cssText = 'padding:0 8px 4px;position:relative';
+    this._paintCourseSwitcher();
+    bar.appendChild(this._courseSlot);
 
     // Nav groups
     const nav = document.createElement('div');
@@ -277,18 +310,21 @@ export class NotebookMindApp extends Widget {
     );
     bar.appendChild(nav);
 
+    // Teacher section (separator + Teacher nav) — only shown for teachers.
+    this._teachSection = document.createElement('div');
     const sep = document.createElement('div');
     sep.style.cssText =
       'height:1px;background:var(--border-subtle);margin:10px 16px';
-    bar.appendChild(sep);
-
+    this._teachSection.appendChild(sep);
     const teachNav = document.createElement('div');
     teachNav.style.cssText =
       'display:flex;flex-direction:column;gap:1px;padding:0 8px';
     NAV.filter(n => n.group === 'teach').forEach(n =>
       teachNav.appendChild(this._navItem(n))
     );
-    bar.appendChild(teachNav);
+    this._teachSection.appendChild(teachNav);
+    bar.appendChild(this._teachSection);
+    this._paintTeachSection();
 
     const spacer = document.createElement('div');
     spacer.style.flex = '1';
@@ -302,6 +338,197 @@ export class NotebookMindApp extends Widget {
     bar.appendChild(this._foot);
 
     return bar;
+  }
+
+  /** (Re)paint the sidebar course switcher (switch · join · create). */
+  private _paintCourseSwitcher(): void {
+    const slot = this._courseSlot;
+    slot.innerHTML = '';
+    const uc = activeCourse();
+
+    const pop = document.createElement('div');
+    pop.style.cssText = [
+      'position:absolute;top:44px;left:8px;right:8px;background:var(--bg-elevated)',
+      'border:1px solid var(--border-default);border-radius:10px',
+      'box-shadow:0 8px 28px rgba(0,0,0,0.13);padding:6px;display:none',
+      'flex-direction:column;gap:1px;z-index:250;animation:nm-rise 0.15s ease-out both'
+    ].join(';');
+
+    const capLbl = document.createElement('div');
+    capLbl.style.cssText =
+      'font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary);padding:6px 8px 4px';
+    capLbl.textContent = 'Your courses';
+    pop.appendChild(capLbl);
+
+    allCourses().forEach(c => {
+      const item = document.createElement('div');
+      item.style.cssText =
+        'display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out)';
+      const info = document.createElement('div');
+      info.style.cssText = 'display:flex;flex-direction:column;gap:1px;min-width:0;flex:1';
+      info.innerHTML =
+        `<span style="font-size:12.5px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.data.subject}</span>` +
+        `<span style="font-size:10.5px;color:var(--text-quaternary);font-family:var(--font-mono)">${c.code}${c.isOwn ? ' · you teach' : ''}</span>`;
+      info.addEventListener('click', () => {
+        pop.style.display = 'none';
+        setActiveCourse(c.id);
+        this._paintCourseSwitcher();
+        this.navigate('home');
+      });
+      item.appendChild(info);
+
+      // Right slot: check (active) by default; Leave/Delete only on hover.
+      const right = document.createElement('div');
+      right.style.cssText =
+        'flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end';
+      const check = document.createElement('span');
+      check.style.cssText = `display:${c.id === uc.id ? 'inline-flex' : 'none'}`;
+      check.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-text)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      right.appendChild(check);
+
+      let armed = false;
+      const leave = document.createElement('span');
+      leave.style.cssText =
+        'display:none;font-size:10.5px;font-weight:500;color:var(--text-tertiary);padding:2px 7px;border-radius:5px;cursor:pointer;white-space:nowrap;border:1px solid var(--border-default);transition:color var(--dur-fast) var(--ease-out),background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)';
+      leave.textContent = c.isOwn ? 'Delete' : 'Leave';
+      leave.title = c.isOwn ? 'Delete this course' : 'Leave this course';
+      leave.addEventListener('mouseenter', () => {
+        leave.style.color = 'var(--red-400)';
+        leave.style.background = 'var(--red-bg)';
+        leave.style.borderColor = 'rgba(192,52,52,0.32)';
+      });
+      leave.addEventListener('mouseleave', () => {
+        if (!armed) {
+          leave.style.color = 'var(--text-tertiary)';
+          leave.style.background = 'transparent';
+          leave.style.borderColor = 'var(--border-default)';
+        }
+      });
+      leave.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!armed) {
+          armed = true;
+          leave.textContent = 'Confirm';
+          leave.style.color = 'var(--red-400)';
+          leave.style.background = 'var(--red-bg)';
+          leave.style.borderColor = 'rgba(192,52,52,0.32)';
+          return;
+        }
+        if (c.isOwn) {
+          deleteCourse(c.id);
+        } else {
+          leaveCourse(c.id);
+        }
+        this._paintCourseSwitcher();
+        this.navigate('home');
+      });
+      right.appendChild(leave);
+      item.appendChild(right);
+
+      const resetLeave = (): void => {
+        armed = false;
+        leave.textContent = c.isOwn ? 'Delete' : 'Leave';
+        leave.style.color = 'var(--text-tertiary)';
+        leave.style.background = 'transparent';
+        leave.style.borderColor = 'var(--border-default)';
+      };
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'rgba(0,0,0,0.05)';
+        check.style.display = 'none';
+        leave.style.display = 'inline-flex';
+      });
+      item.addEventListener('mouseleave', () => {
+        item.style.background = 'transparent';
+        leave.style.display = 'none';
+        resetLeave();
+        check.style.display = c.id === uc.id ? 'inline-flex' : 'none';
+      });
+      pop.appendChild(item);
+    });
+
+    const sep = document.createElement('div');
+    sep.style.cssText = 'height:1px;background:var(--border-subtle);margin:4px 6px';
+    pop.appendChild(sep);
+
+    const action = (svg: string, label: string, onClick: () => void): HTMLElement => {
+      const el = document.createElement('div');
+      el.style.cssText =
+        'display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--accent-text);transition:background-color var(--dur-fast) var(--ease-out)';
+      el.innerHTML = `${svg}<span>${label}</span>`;
+      el.addEventListener('mouseenter', () => {
+        el.style.background = 'var(--accent-subtle-bg)';
+      });
+      el.addEventListener('mouseleave', () => {
+        el.style.background = 'transparent';
+      });
+      el.addEventListener('click', () => {
+        pop.style.display = 'none';
+        onClick();
+      });
+      return el;
+    };
+    pop.appendChild(
+      action(
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>',
+        'Join a course…',
+        () => openCourseModal(this, 'join')
+      )
+    );
+    // Only teachers can create courses.
+    if (profile.role === 'teacher') {
+      pop.appendChild(
+        action(
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+          'Create a course…',
+          () => openCourseModal(this, 'create')
+        )
+      );
+    }
+    slot.appendChild(pop);
+
+    // Trigger row (select-styled)
+    const trigger = document.createElement('div');
+    trigger.style.cssText = [
+      'display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;cursor:pointer',
+      'background:var(--bg-panel);border:1px solid var(--border-default)',
+      'transition:border-color var(--dur-fast) var(--ease-out)'
+    ].join(';');
+    trigger.innerHTML =
+      '<div style="display:flex;flex-direction:column;gap:1px;min-width:0;flex:1">' +
+      `<span style="font-size:12.5px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${uc.data.subject}</span>` +
+      `<span style="font-size:10px;color:var(--text-quaternary);font-family:var(--font-mono)">${uc.isOwn ? 'You teach · ' : ''}${uc.code}</span>` +
+      '</div>' +
+      '<span style="flex:0 0 auto;display:inline-flex;color:var(--text-quaternary)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 15 12 20 17 15"></polyline><polyline points="7 9 12 4 17 9"></polyline></svg></span>';
+    trigger.addEventListener('mouseenter', () => {
+      trigger.style.borderColor = 'var(--border-strong)';
+    });
+    trigger.addEventListener('mouseleave', () => {
+      trigger.style.borderColor = 'var(--border-default)';
+    });
+    const onOutside = (e: MouseEvent): void => {
+      if (!slot.contains(e.target as Node)) {
+        pop.style.display = 'none';
+        document.removeEventListener('mousedown', onOutside);
+      }
+    };
+    trigger.addEventListener('click', () => {
+      const open = pop.style.display !== 'none';
+      pop.style.display = open ? 'none' : 'flex';
+      if (open) {
+        document.removeEventListener('mousedown', onOutside);
+      } else {
+        setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+      }
+    });
+    slot.appendChild(trigger);
+  }
+
+  /** Show the Teacher nav only for teacher accounts. */
+  private _paintTeachSection(): void {
+    if (this._teachSection) {
+      this._teachSection.style.display = profile.role === 'teacher' ? '' : 'none';
+    }
   }
 
   /** (Re)paint the sidebar account row + popover from the current profile. */
@@ -322,7 +549,7 @@ export class NotebookMindApp extends Widget {
     const popHead = document.createElement('div');
     popHead.style.cssText =
       'display:flex;align-items:center;gap:10px;padding:8px 10px 10px;border-bottom:1px solid var(--border-subtle);margin-bottom:4px';
-    popHead.appendChild(avatar(profile.name, 28));
+    popHead.appendChild(avatar(profile.name, 28, profile.avatarUrl));
     const popWho = document.createElement('div');
     popWho.style.cssText =
       'display:flex;flex-direction:column;gap:2px;min-width:0';
@@ -362,6 +589,18 @@ export class NotebookMindApp extends Widget {
       item.addEventListener('click', onClick);
       return item;
     };
+
+    // Edit profile (name + photo)
+    pop.appendChild(
+      popItem(
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>',
+        'Edit profile',
+        () => {
+          pop.style.display = 'none';
+          openProfileModal(() => this._paintAccount());
+        }
+      )
+    );
 
     // Add friends
     pop.appendChild(
@@ -414,7 +653,7 @@ export class NotebookMindApp extends Widget {
     const acct = document.createElement('div');
     acct.style.cssText =
       'display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out)';
-    acct.appendChild(avatar(profile.name, 28));
+    acct.appendChild(avatar(profile.name, 28, profile.avatarUrl));
     const who = document.createElement('div');
     who.style.cssText =
       'display:flex;flex-direction:column;gap:2px;min-width:0;flex:1';
@@ -440,9 +679,21 @@ export class NotebookMindApp extends Widget {
     acct.addEventListener('mouseleave', () => {
       acct.style.background = 'transparent';
     });
+    const onOutside = (e: MouseEvent): void => {
+      if (!foot.contains(e.target as Node)) {
+        pop.style.display = 'none';
+        document.removeEventListener('mousedown', onOutside);
+      }
+    };
     acct.addEventListener('click', () => {
       const open = pop.style.display !== 'none';
       pop.style.display = open ? 'none' : 'flex';
+      if (open) {
+        document.removeEventListener('mousedown', onOutside);
+      } else {
+        // Defer so this very click doesn't immediately close the popover.
+        setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+      }
       deleteArmed = false;
       const lbl = del.querySelector('.nm-pop-lbl');
       if (lbl) lbl.textContent = 'Delete account';
@@ -472,7 +723,9 @@ export class NotebookMindApp extends Widget {
     const login = new LoginWidget(() => {
       login.node.remove();
       this._paintAccount();
+      this._paintTeachSection();
       this.navigate('home');
+      this.maybeOnboard();
     });
     const shellNode =
       document.querySelector('#main') ??
@@ -629,6 +882,7 @@ export class NotebookMindApp extends Widget {
   private _bindEvents(): void {
     document.addEventListener('notebookmind:user', () => {
       this._paintAccount();
+      this._paintTeachSection();
     });
     document.addEventListener('notebookmind:points', () => {
       this._ptsBadge.textContent = `${pointsEngine.total} XP`;

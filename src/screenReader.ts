@@ -7,7 +7,8 @@ import {
   updateDocumentSections, IFlashcard
 } from './supabaseDB';
 import { pointsEngine } from './points';
-import { spinner } from './uiKit';
+import { spinner, backArrow } from './uiKit';
+import { ISlide } from './slidesData';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -115,6 +116,151 @@ function splitIntoSections(pages: IPageData[]): ISection[] {
   return sections;
 }
 
+// ── Local (no-AI) quiz & flashcard generation ─────────────────
+// When no API key is set, we still make the study tools usable by deriving
+// simple questions and cards from the section text (clearly "demo" quality).
+
+const STOPWORDS = new Set(
+  ('the a an and or of to in on for with is are was were be been being this that these those it its as at by from into your you we our their they them he she his her which who what when where why how not no can will would should could may might also more most some any each per via using used use uses'.split(
+    ' '
+  ))
+);
+
+function _sentences(text: string): string[] {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length >= 24 && s.length <= 200);
+}
+
+function _keywords(text: string): string[] {
+  const words = (text || '').match(/\b[A-Za-z][A-Za-z-]{3,}\b/g) || [];
+  const freq = new Map<string, number>();
+  for (const w of words) {
+    const lw = w.toLowerCase();
+    if (STOPWORDS.has(lw)) continue;
+    freq.set(w, (freq.get(w) || 0) + 1);
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(e => e[0])
+    .filter((v, i, arr) => arr.indexOf(v) === i)
+    .slice(0, 8);
+}
+
+function _negate(s: string): string {
+  const repls: [RegExp, string][] = [
+    [/\bis\b/, 'is not'],
+    [/\bare\b/, 'are not'],
+    [/\bcan\b/, 'cannot'],
+    [/\bwill\b/, 'will not'],
+    [/\balways\b/, 'never']
+  ];
+  for (const [re, rep] of repls) {
+    if (re.test(s)) return s.replace(re, rep);
+  }
+  return `It is incorrect that ${s.charAt(0).toLowerCase()}${s.slice(1)}`;
+}
+
+function _fillBlank(sentences: string[], kws: string[]): IQuizQuestion | null {
+  for (const s of sentences) {
+    const kw = kws.find(k => new RegExp(`\\b${k}\\b`).test(s));
+    if (kw) {
+      return {
+        type: 'fill_blank',
+        question: s.replace(new RegExp(`\\b${kw}\\b`), '_____'),
+        options: [],
+        correct_answer: kw,
+        explanation: `The missing word is “${kw}”.`
+      };
+    }
+  }
+  return null;
+}
+
+function localQuiz(title: string, text: string): IQuizQuestion[] {
+  const ss = _sentences(text);
+  const kws = _keywords(text);
+  const out: IQuizQuestion[] = [];
+
+  if (ss[0]) {
+    out.push({
+      type: 'true_false',
+      question: `True or false: ${ss[0]}`,
+      options: ['True', 'False'],
+      correct_answer: 'True',
+      explanation: 'This restates a point made in the section.'
+    });
+  }
+  const fb = _fillBlank(ss, kws);
+  if (fb) out.push(fb);
+  if (ss[1]) {
+    out.push({
+      type: 'true_false',
+      question: `True or false: ${_negate(ss[1])}`,
+      options: ['True', 'False'],
+      correct_answer: 'False',
+      explanation: `The section actually states: “${ss[1]}”`
+    });
+  }
+  const fb2 = _fillBlank(ss.slice(2), kws);
+  if (fb2) out.push(fb2);
+  out.push({
+    type: 'open_answer',
+    question: `In your own words, summarise the main idea of “${title}”.`,
+    options: [],
+    correct_answer: ss.slice(0, 2).join(' ') || 'Summarise the key points of this section.',
+    explanation: 'Compare your answer with the section’s main points.'
+  });
+
+  // Pad to 5 with keyword prompts if the text was sparse.
+  let ki = 0;
+  while (out.length < 5 && ki < kws.length) {
+    out.push({
+      type: 'open_answer',
+      question: `What role does “${kws[ki]}” play in this section?`,
+      options: [],
+      correct_answer: `Explain how ${kws[ki]} relates to the section’s topic.`,
+      explanation: 'A model answer would connect this term to the section’s main idea.'
+    });
+    ki++;
+  }
+  return out.slice(0, 5);
+}
+
+function localFlashcards(
+  title: string,
+  text: string
+): Array<{ front: string; back: string; card_type: string }> {
+  const ss = _sentences(text);
+  const kws = _keywords(text);
+  const cards: Array<{ front: string; back: string; card_type: string }> = [];
+  for (const kw of kws) {
+    const s = ss.find(x => new RegExp(`\\b${kw}\\b`).test(x));
+    if (s) {
+      cards.push({ front: kw, back: s, card_type: 'term_definition' });
+    }
+    if (cards.length >= 4) break;
+  }
+  if (ss[0]) {
+    cards.push({
+      front: `Key idea of “${title}”?`,
+      back: ss[0],
+      card_type: 'key_claim'
+    });
+  }
+  // Fallback if the section had almost no usable text.
+  if (cards.length === 0) {
+    cards.push({
+      front: title || 'This section',
+      back: (text || 'Review this section in the reader.').slice(0, 160),
+      card_type: 'term_definition'
+    });
+  }
+  return cards.slice(0, 5);
+}
+
 // ── Public API ────────────────────────────────────────────────
 
 export function loadReaderWithPages(
@@ -159,38 +305,35 @@ function _render(): void {
   host.innerHTML = '';
   host.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--bg-app)';
 
-  // Prototype header: back link over an 18px title, shortcuts ghost right.
+  // Header: inline back arrow + 18px title, study buttons on the right.
   const header = document.createElement('div');
   header.style.cssText =
-    'display:flex;align-items:flex-end;gap:12px;padding:14px 24px 12px;flex-shrink:0';
+    'display:flex;align-items:center;gap:12px;padding:14px 24px 12px;flex-shrink:0';
 
   const headCol = document.createElement('div');
   headCol.style.cssText =
-    'display:flex;flex-direction:column;gap:6px;flex:1;min-width:0';
-  const backEl = document.createElement('span');
-  backEl.style.cssText =
-    'display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--text-tertiary);cursor:pointer;align-self:flex-start;transition:color var(--dur-fast) var(--ease-out)';
-  backEl.innerHTML =
-    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>Back to Slides &amp; Papers';
-  backEl.addEventListener('mouseenter', () => {
-    backEl.style.color = 'var(--text-primary)';
-  });
-  backEl.addEventListener('mouseleave', () => {
-    backEl.style.color = 'var(--text-tertiary)';
-  });
-  if (onExit) backEl.addEventListener('click', () => onExit(false));
+    'display:flex;align-items:center;gap:8px;flex:1;min-width:0';
+  if (onExit) {
+    headCol.appendChild(backArrow(() => onExit(false), 'Back to Slides & Papers'));
+  }
   const titleEl = document.createElement('h1');
   titleEl.style.cssText =
     'margin:0;font-size:18px;font-weight:600;letter-spacing:-0.016em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)';
   titleEl.textContent = state.docTitle || 'Slides & Papers';
-  headCol.appendChild(backEl);
   headCol.appendChild(titleEl);
   header.appendChild(headCol);
 
   if (state.doc) {
-    const kbBtn = _btn('Keyboard shortcuts', 'ghost');
-    kbBtn.addEventListener('click', () => _showShortcuts());
-    header.appendChild(kbBtn);
+    const quizBtn = _btn('Take quiz', 'primary');
+    quizBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Take quiz';
+    quizBtn.addEventListener('click', () => _openStudy('quiz'));
+    const fcBtn = _btn('Flashcards', 'secondary');
+    fcBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2"></rect><path d="M22 4v12"></path></svg>Flashcards';
+    fcBtn.addEventListener('click', () => _openStudy('flashcards'));
+    header.appendChild(quizBtn);
+    header.appendChild(fcBtn);
   }
   host.appendChild(header);
 
@@ -290,7 +433,7 @@ function _renderUpload(content: HTMLElement): void {
 function _renderFull(content: HTMLElement): void {
   content.innerHTML = '';
   content.style.cssText =
-    'flex:1;display:grid;grid-template-columns:minmax(150px,220px) minmax(320px,1fr) minmax(240px,320px);gap:0;min-height:0;border-top:1px solid var(--border-subtle);overflow:hidden';
+    'flex:1;display:grid;grid-template-columns:minmax(160px,240px) 1fr;gap:0;min-height:0;border-top:1px solid var(--border-subtle);overflow:hidden';
 
   // ── LEFT: sections ────────────────────────────────────────────
   const sidebar = document.createElement('div');
@@ -365,18 +508,22 @@ function _renderFull(content: HTMLElement): void {
   const sec = state.sections[state.currentSection];
   const page = sec?.pages[state.currentPage] ?? sec?.pages[0];
 
-  // Slide card
-  const slide = document.createElement('div');
-  if (page?.imageBase64) {
+  // Slide card — structured deck slide, PDF image, or plain text (in order).
+  let slide: HTMLElement;
+  if (page?.deckSlide) {
+    slide = renderDeckSlide(page.deckSlide);
+  } else if (page?.imageBase64) {
+    slide = document.createElement('div');
     slide.style.cssText =
-      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07);overflow:hidden';
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.06);overflow:hidden';
     const img = document.createElement('img');
     img.src = `data:image/jpeg;base64,${page.imageBase64}`;
     img.style.cssText = 'display:block;width:100%;height:auto';
     slide.appendChild(img);
   } else {
+    slide = document.createElement('div');
     slide.style.cssText =
-      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07);padding:34px 40px;display:flex;flex-direction:column;gap:18px;min-height:0';
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.06);padding:34px 40px;display:flex;flex-direction:column;gap:18px;min-height:0';
     const eyebrow = document.createElement('span');
     eyebrow.style.cssText =
       'font-size:11px;font-weight:600;color:var(--accent-text);text-transform:uppercase;letter-spacing:0.08em';
@@ -469,62 +616,392 @@ function _renderFull(content: HTMLElement): void {
   navRow.appendChild(uBtn);
   center.appendChild(navRow);
 
-  // ── RIGHT: study panel ────────────────────────────────────────
-  const panel = document.createElement('div');
-  panel.style.cssText =
-    'border-left:1px solid var(--border-subtle);background:var(--bg-app);overflow-y:auto;display:flex;flex-direction:column;min-height:0';
-
-  const tabHead = document.createElement('div');
-  tabHead.style.cssText =
-    'display:flex;gap:2px;padding:10px 12px;border-bottom:1px solid var(--border-subtle);flex-shrink:0';
-  const tabs: Array<{ id: IReaderState['activeTab']; label: string }> = [
-    { id: 'quiz', label: 'Quiz' },
-    { id: 'flashcards', label: 'Flashcards' }
-  ];
-  tabs.forEach(t => {
-    const b = document.createElement('span');
-    const on = state.activeTab === t.id;
-    b.textContent = t.label;
-    b.style.cssText = [
-      'flex:1;text-align:center;padding:6px 0;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer',
-      'transition:background-color var(--dur-fast) var(--ease-out)',
-      on
-        ? 'background:var(--accent-subtle-bg);color:var(--accent-text)'
-        : 'color:var(--text-tertiary)'
-    ].join(';');
-    if (!on) {
-      b.addEventListener('mouseenter', () => {
-        b.style.color = 'var(--text-primary)';
-      });
-      b.addEventListener('mouseleave', () => {
-        b.style.color = 'var(--text-tertiary)';
-      });
-    }
-    b.addEventListener('click', () => {
-      state.activeTab = t.id;
-      _render();
-    });
-    tabHead.appendChild(b);
-  });
-
-  const tabContent = document.createElement('div');
-  tabContent.style.cssText =
-    'padding:14px;display:flex;flex-direction:column;gap:12px';
-  if (state.activeTab === 'quiz') _renderQuizTab(tabContent);
-  else _renderFlashcardsTab(tabContent);
-
-  panel.appendChild(tabHead);
-  panel.appendChild(tabContent);
-
   content.appendChild(sidebar);
   content.appendChild(center);
-  content.appendChild(panel);
+}
+
+// ── Rich lecture-slide renderer ────────────────────────────────
+function renderDeckSlide(s: ISlide): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'position:relative;background:var(--surface-card);border:1px solid var(--border-default);border-radius:16px',
+    'box-shadow:0 6px 28px rgba(0,0,0,0.07);padding:44px 52px;display:flex;flex-direction:column;gap:20px',
+    'min-height:440px;overflow:hidden;animation:nm-rise 0.2s var(--ease-out) both'
+  ].join(';');
+  const accent = document.createElement('div');
+  accent.style.cssText =
+    'position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,var(--brand-500),var(--brand-400))';
+  card.appendChild(accent);
+
+  const eyebrow = (t: string): HTMLElement => {
+    const e = document.createElement('div');
+    e.style.cssText =
+      'font-size:11.5px;font-weight:700;color:var(--accent-text);text-transform:uppercase;letter-spacing:0.12em';
+    e.textContent = t;
+    return e;
+  };
+  const titleEl = (big = false): HTMLElement => {
+    const h = document.createElement('div');
+    h.style.cssText = `font-size:${big ? '40px' : '28px'};font-weight:700;letter-spacing:-0.02em;line-height:1.12;color:var(--text-primary)`;
+    if (s.titleHi && s.title?.includes(s.titleHi)) {
+      h.innerHTML = s.title.replace(
+        s.titleHi,
+        `<span style="color:var(--accent-text)">${s.titleHi}</span>`
+      );
+    } else {
+      h.textContent = s.title ?? '';
+    }
+    return h;
+  };
+  const subEl = (): HTMLElement => {
+    const p = document.createElement('div');
+    p.style.cssText =
+      'font-size:15px;color:var(--text-secondary);line-height:1.6;max-width:780px';
+    p.textContent = s.subtitle ?? '';
+    return p;
+  };
+  const codeBlock = (code: string, caption?: string): HTMLElement => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+    if (caption) {
+      const c = document.createElement('div');
+      c.style.cssText =
+        'font-size:11px;font-weight:600;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em';
+      c.textContent = caption;
+      wrap.appendChild(c);
+    }
+    const pre = document.createElement('pre');
+    pre.style.cssText =
+      'margin:0;background:#0f1117;color:#d6def0;border-radius:10px;padding:16px 18px;font-family:var(--font-mono);font-size:13px;line-height:1.65;overflow-x:auto;white-space:pre;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.05)';
+    pre.textContent = code;
+    wrap.appendChild(pre);
+    return wrap;
+  };
+  const stepCard = (st: NonNullable<ISlide['steps']>[number], withCode: boolean): HTMLElement => {
+    const d = document.createElement('div');
+    d.style.cssText =
+      'background:var(--bg-panel);border:1px solid var(--border-default);border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:7px';
+    const top = document.createElement('div');
+    top.style.cssText = 'display:flex;align-items:center;gap:10px';
+    const num = document.createElement('span');
+    num.style.cssText =
+      'flex:0 0 auto;width:26px;height:26px;border-radius:7px;background:var(--accent-subtle-bg);color:var(--accent-text);font-family:var(--font-mono);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center';
+    num.textContent = st.n;
+    const tt = document.createElement('span');
+    tt.style.cssText = 'font-size:14.5px;font-weight:600;color:var(--text-primary)';
+    tt.textContent = st.title;
+    top.appendChild(num);
+    top.appendChild(tt);
+    d.appendChild(top);
+    if (withCode && st.code) {
+      const c = document.createElement('code');
+      c.style.cssText =
+        'font-family:var(--font-mono);font-size:11.5px;color:var(--accent-text);background:var(--accent-subtle-bg);border-radius:5px;padding:2px 7px;align-self:flex-start';
+      c.textContent = st.code;
+      d.appendChild(c);
+    }
+    const tx = document.createElement('div');
+    tx.style.cssText = 'font-size:12.5px;color:var(--text-tertiary);line-height:1.5';
+    tx.textContent = st.text;
+    d.appendChild(tx);
+    return d;
+  };
+
+  if (s.eyebrow) card.appendChild(eyebrow(s.eyebrow));
+
+  switch (s.kind) {
+    case 'title': {
+      card.style.justifyContent = 'center';
+      card.style.gap = '16px';
+      card.style.minHeight = '460px';
+      card.appendChild(titleEl(true));
+      if (s.subtitle) card.appendChild(subEl());
+      if (s.tags?.length) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:6px';
+        s.tags.forEach(t => {
+          const chip = document.createElement('span');
+          chip.style.cssText =
+            'font-size:12.5px;font-weight:500;color:var(--accent-text);background:var(--accent-subtle-bg);border-radius:999px;padding:5px 13px';
+          chip.textContent = t;
+          row.appendChild(chip);
+        });
+        card.appendChild(row);
+      }
+      if (s.presenter) {
+        const p = document.createElement('div');
+        p.style.cssText =
+          'margin-top:14px;font-size:12.5px;color:var(--text-quaternary);border-top:1px solid var(--border-subtle);padding-top:14px';
+        p.textContent = s.presenter;
+        card.appendChild(p);
+      }
+      break;
+    }
+    case 'overview': {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      const grid = document.createElement('div');
+      grid.style.cssText =
+        'display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1.4fr);gap:18px;align-items:stretch;margin-top:4px';
+      if (s.stat) {
+        const st = document.createElement('div');
+        st.style.cssText =
+          'background:linear-gradient(135deg,var(--accent),var(--accent-hover));color:#fff;border-radius:14px;padding:22px;display:flex;flex-direction:column;justify-content:center;gap:8px';
+        st.innerHTML = `<span style="font-size:46px;font-weight:700;letter-spacing:-0.03em;line-height:1">${s.stat.value}</span><span style="font-size:13px;line-height:1.5;opacity:0.92">${s.stat.label}</span>`;
+        grid.appendChild(st);
+      }
+      const steps = document.createElement('div');
+      steps.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px';
+      (s.steps ?? []).forEach(x => steps.appendChild(stepCard(x, false)));
+      grid.appendChild(steps);
+      card.appendChild(grid);
+      break;
+    }
+    case 'code': {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      if (s.bullets?.length) {
+        const ul = document.createElement('div');
+        ul.style.cssText = 'display:flex;flex-direction:column;gap:7px';
+        s.bullets.forEach(b => {
+          const li = document.createElement('div');
+          li.style.cssText =
+            'display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--text-secondary);line-height:1.5';
+          li.innerHTML = `<span style="flex:0 0 auto;color:var(--green-500);margin-top:1px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span><span>${b}</span>`;
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
+      }
+      if (s.code) card.appendChild(codeBlock(s.code, s.codeCaption));
+      if (s.text) {
+        const t = document.createElement('div');
+        t.style.cssText =
+          'font-size:13.5px;color:var(--text-tertiary);line-height:1.6;border-left:3px solid var(--accent);padding-left:12px';
+        t.textContent = s.text;
+        card.appendChild(t);
+      }
+      break;
+    }
+    case 'steps':
+    case 'exercise': {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      const n = s.steps?.length ?? 1;
+      const cols = n >= 4 ? 2 : n;
+      const grid = document.createElement('div');
+      grid.style.cssText = `display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px;margin-top:4px`;
+      (s.steps ?? []).forEach(x => grid.appendChild(stepCard(x, s.kind === 'steps')));
+      card.appendChild(grid);
+      if (s.footer) {
+        const f = document.createElement('div');
+        f.style.cssText =
+          'margin-top:6px;font-size:12.5px;color:var(--text-quaternary);background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 14px';
+        f.textContent = s.footer;
+        card.appendChild(f);
+      }
+      break;
+    }
+    case 'stat': {
+      card.appendChild(titleEl());
+      if (s.code) card.appendChild(codeBlock(s.code, s.codeCaption));
+      if (s.stat) {
+        const st = document.createElement('div');
+        st.style.cssText =
+          'display:flex;align-items:center;gap:20px;background:var(--accent-subtle-bg);border:1px solid rgba(94,106,210,0.25);border-radius:14px;padding:22px 24px;margin-top:4px';
+        st.innerHTML = `<span style="flex:0 0 auto;font-size:52px;font-weight:700;letter-spacing:-0.03em;color:var(--accent-text);line-height:1">${s.stat.value}</span><span style="font-size:14px;color:var(--text-secondary);line-height:1.55">${s.stat.label}</span>`;
+        card.appendChild(st);
+      }
+      break;
+    }
+    case 'compare': {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px';
+      const col = (label: string, color: string, bg: string, bd: string, t: string, tx: string): HTMLElement => {
+        const d = document.createElement('div');
+        d.style.cssText = `background:${bg};border:1px solid ${bd};border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:8px`;
+        d.innerHTML = `<span style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:${color}">${label}</span><span style="font-size:16px;font-weight:600;color:var(--text-primary)">${t}</span><span style="font-size:13px;color:var(--text-tertiary);line-height:1.55">${tx}</span>`;
+        return d;
+      };
+      if (s.compare) {
+        grid.appendChild(col('AVOID', 'var(--red-500)', 'var(--red-bg)', 'rgba(192,52,52,0.25)', s.compare.avoid.title, s.compare.avoid.text));
+        grid.appendChild(col('PREFER', 'var(--green-500)', 'var(--green-bg)', 'rgba(23,138,84,0.28)', s.compare.prefer.title, s.compare.prefer.text));
+      }
+      card.appendChild(grid);
+      break;
+    }
+    case 'statement': {
+      card.style.justifyContent = 'center';
+      card.style.gap = '18px';
+      card.style.minHeight = '420px';
+      card.appendChild(titleEl(true));
+      if (s.text) {
+        const t = document.createElement('div');
+        t.style.cssText = 'font-size:19px;color:var(--text-secondary);line-height:1.6;max-width:720px';
+        t.textContent = s.text;
+        card.appendChild(t);
+      }
+      break;
+    }
+    default: {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      if (s.bullets?.length) {
+        const ul = document.createElement('div');
+        ul.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:6px';
+        s.bullets.forEach(b => {
+          const li = document.createElement('div');
+          li.style.cssText =
+            'display:flex;gap:12px;align-items:flex-start;font-size:16px;color:var(--text-secondary);line-height:1.5';
+          li.innerHTML = `<span style="flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-top:9px"></span><span>${b}</span>`;
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
+      }
+    }
+  }
+  return card;
+}
+
+// ── Study modal (quiz / flashcards) ────────────────────────────
+// Quiz and flashcards run in a focused modal so the slide can use the
+// full width. The tab content renderers below draw into `_studyBody`.
+let _studyBody: HTMLElement | null = null;
+let _studyFooter: HTMLElement | null = null;
+
+function clearStudyFooter(): void {
+  if (_studyFooter) {
+    _studyFooter.innerHTML = '';
+    _studyFooter.style.display = 'none';
+  }
+}
+
+function _openStudy(tab: IReaderState['activeTab']): void {
+  state.activeTab = tab;
+  // Reset any half-finished quiz so opening always starts clean.
+  if (tab === 'quiz' && state.quizDone) {
+    state.quizQuestions = null;
+    state.quizAnswers = [];
+    state.quizIdx = 0;
+    state.quizDone = false;
+  }
+  state.fcStudying = false;
+  state.fcFlipped = false;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'nm-study-overlay';
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:1400;background:var(--surface-overlay);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:var(--font-sans)';
+
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'width:940px;max-width:100%;min-height:min(560px, calc(100vh - 48px));max-height:calc(100vh - 48px);background:var(--bg-elevated)',
+    'border:1px solid var(--border-strong);border-radius:14px;display:flex;flex-direction:column;overflow:hidden',
+    'box-shadow:0 24px 64px rgba(0,0,0,0.22);animation:nm-rise 0.2s cubic-bezier(0.16,1,0.3,1) both'
+  ].join(';');
+
+  const sec = state.sections[state.currentSection];
+  const head = document.createElement('div');
+  head.style.cssText =
+    'display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border-subtle);flex-shrink:0';
+  const tabWrap = document.createElement('div');
+  tabWrap.style.cssText =
+    'display:flex;gap:2px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:3px';
+  const mkTab = (id: IReaderState['activeTab'], label: string): HTMLElement => {
+    const b = document.createElement('span');
+    b.textContent = label;
+    const on = state.activeTab === id;
+    b.style.cssText =
+      'padding:5px 14px;border-radius:5px;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;' +
+      (on
+        ? 'background:var(--bg-panel);color:var(--text-primary);box-shadow:0 1px 2px rgba(0,0,0,0.14), 0 0 0 1px var(--border-default)'
+        : 'color:var(--text-tertiary)');
+    b.addEventListener('click', () => {
+      state.activeTab = id;
+      state.fcStudying = false;
+      renderStudyBody();
+    });
+    return b;
+  };
+  tabWrap.appendChild(mkTab('quiz', 'Quiz'));
+  tabWrap.appendChild(mkTab('flashcards', 'Flashcards'));
+  head.appendChild(tabWrap);
+  const secLbl = document.createElement('span');
+  secLbl.style.cssText =
+    'flex:1;min-width:0;font-size:12px;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+  secLbl.textContent = sec?.title ?? '';
+  head.appendChild(secLbl);
+  const close = document.createElement('span');
+  close.style.cssText =
+    'flex:0 0 auto;cursor:pointer;color:var(--text-tertiary);display:inline-flex;padding:4px;border-radius:6px;transition:background-color var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out)';
+  close.innerHTML =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+  close.addEventListener('mouseenter', () => {
+    close.style.background = 'rgba(0,0,0,0.05)';
+    close.style.color = 'var(--text-primary)';
+  });
+  close.addEventListener('mouseleave', () => {
+    close.style.background = 'transparent';
+    close.style.color = 'var(--text-tertiary)';
+  });
+  head.appendChild(close);
+  card.appendChild(head);
+
+  // Scroll area holds a centered, fixed-width column so the content sits
+  // in the middle of the big modal instead of hugging a corner.
+  const body = document.createElement('div');
+  body.style.cssText =
+    'flex:1;overflow-y:auto;min-height:0;padding:28px 24px;display:flex;justify-content:center;align-items:center';
+  const inner = document.createElement('div');
+  inner.style.cssText =
+    'width:100%;max-width:600px;display:flex;flex-direction:column;gap:16px';
+  body.appendChild(inner);
+  card.appendChild(body);
+  _studyBody = inner;
+
+  // Footer action bar (bottom-right) — the quiz's Next button lives here.
+  const footer = document.createElement('div');
+  footer.style.cssText =
+    'flex-shrink:0;display:none;justify-content:flex-end;align-items:center;gap:10px;padding:14px 22px;border-top:1px solid var(--border-subtle)';
+  card.appendChild(footer);
+  _studyFooter = footer;
+
+  const dispose = (): void => {
+    _studyBody = null;
+    _studyFooter = null;
+    overlay.remove();
+    _render(); // refresh understood counts etc.
+  };
+  close.addEventListener('click', dispose);
+  overlay.addEventListener('mousedown', e => {
+    if (e.target === overlay) dispose();
+  });
+
+  function renderStudyBody(): void {
+    // repaint the tab pills
+    tabWrap.innerHTML = '';
+    tabWrap.appendChild(mkTab('quiz', 'Quiz'));
+    tabWrap.appendChild(mkTab('flashcards', 'Flashcards'));
+    clearStudyFooter();
+    if (!_studyBody) return;
+    _studyBody.innerHTML = '';
+    if (state.activeTab === 'quiz') _renderQuizTab(_studyBody);
+    else _renderFlashcardsTab(_studyBody);
+  }
+  (overlay as any)._renderStudyBody = renderStudyBody;
+  (overlay as any)._dispose = dispose;
+
+  renderStudyBody();
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
 }
 
 // ── Quiz tab ───────────────────────────────────────────────────
 
 function _renderQuizTab(host: HTMLElement): void {
   const sec = state.sections[state.currentSection];
+  clearStudyFooter();
 
   if (state.quizLoading) {
     const sp = spinner('Generating quiz…');
@@ -551,8 +1028,8 @@ function _renderQuizTab(host: HTMLElement): void {
     `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">Test yourself on “${sec?.title ?? 'this section'}” with 5 AI-generated questions.</span>`;
   host.appendChild(idle);
 
-  const genBtn = _btn('Generate quiz', 'primary');
-  genBtn.disabled = !isAiReady() || !sec?.text;
+  const genBtn = _btn(isAiReady() ? 'Generate quiz' : 'Generate demo quiz', 'primary');
+  genBtn.disabled = !sec?.text;
   idle.appendChild(genBtn);
   genBtn.addEventListener('click', async () => {
     state.quizLoading = true;
@@ -561,24 +1038,29 @@ function _renderQuizTab(host: HTMLElement): void {
     state.quizIdx = 0;
     state.quizDone = false;
     host.innerHTML = '';
-    host.appendChild(spinner('Generating quiz…'));
+    host.appendChild(spinner(isAiReady() ? 'Generating quiz…' : 'Building demo quiz…'));
     try {
-      const text = sec.text.substring(0, 2000);
-      const prompt = `Generate exactly 5 quiz questions about this text. Return ONLY a valid JSON array with one question of each type: multiple_choice, true_false, fill_blank, matching, open_answer.
+      if (isAiReady()) {
+        const text = sec.text.substring(0, 2000);
+        const prompt = `Generate exactly 5 quiz questions about this text. Return ONLY a valid JSON array with one question of each type: multiple_choice, true_false, fill_blank, matching, open_answer.
 Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],"correct_answer":"A","explanation":"..."},{"type":"true_false","question":"...","options":["True","False"],"correct_answer":"True","explanation":"..."},{"type":"fill_blank","question":"The ___ is ...","options":[],"correct_answer":"single word","explanation":"..."},{"type":"matching","question":"Match the terms","options":["Term1: Def1","Term2: Def2","Term3: Def3"],"correct_answer":["Def1","Def2","Def3"],"explanation":"..."},{"type":"open_answer","question":"Explain in your own words...","options":[],"correct_answer":"model answer here","explanation":"..."}]`;
-      const raw = await askAboutCell(text, prompt, []);
-      const match = raw.match(/\[[\s\S]*\]/);
-      if (!match) throw new Error('No JSON array in response');
-      const questions = JSON.parse(match[0]) as IQuizQuestion[];
-      state.quizQuestions = questions.slice(0, 5);
+        const raw = await askAboutCell(text, prompt, []);
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (!match) throw new Error('No JSON array in response');
+        const questions = JSON.parse(match[0]) as IQuizQuestion[];
+        state.quizQuestions = questions.slice(0, 5);
+      } else {
+        state.quizQuestions = localQuiz(sec.title, sec.text);
+      }
       state.quizLoading = false;
       if (isConnected()) {
         await addPoints(2, 'reader_quiz_start', state.docTitle).catch(() => null);
         pointsEngine.addPoints(2, 'reader_quiz_start');
       }
     } catch {
+      // AI failed — fall back to the built-in demo quiz so the tool still works.
+      state.quizQuestions = localQuiz(sec.title, sec.text);
       state.quizLoading = false;
-      state.quizQuestions = null;
     }
     host.innerHTML = '';
     _renderQuizTab(host);
@@ -587,7 +1069,7 @@ Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],
   if (!isAiReady()) {
     const warn = document.createElement('span');
     warn.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
-    warn.textContent = 'Set GEMINI_API_KEY to enable the quiz.';
+    warn.textContent = 'Demo mode — questions are generated from the section text.';
     idle.appendChild(warn);
   }
 }
@@ -602,24 +1084,38 @@ function _renderQuizQuestion(host: HTMLElement): void {
     fill_blank: 'Fill in the blank', matching: 'Matching', open_answer: 'Open answer'
   };
 
+  clearStudyFooter();
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;flex-direction:column;gap:12px;animation:nm-rise 0.22s var(--ease-out) both';
+
   const meta = document.createElement('div');
-  meta.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+  meta.style.cssText = 'display:flex;align-items:center;gap:8px';
   meta.innerHTML =
-    `<span style="font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono)">Question ${state.quizIdx + 1} / ${total}</span>` +
+    `<span style="font-size:12px;color:var(--text-quaternary);font-family:var(--font-mono)">Question ${state.quizIdx + 1} / ${total}</span>` +
     '<span style="flex:1"></span>' +
     `<span style="font-size:11px;font-weight:600;color:var(--accent-text);text-transform:uppercase;letter-spacing:0.05em">${typeLabel[q.type] || q.type}</span>`;
-  host.appendChild(meta);
+  wrap.appendChild(meta);
 
   const qEl = document.createElement('div');
   qEl.style.cssText =
-    'font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:12px;line-height:1.5';
+    'font-size:15px;font-weight:500;color:var(--text-primary);line-height:1.5';
   qEl.textContent = q.question;
-  host.appendChild(qEl);
+  wrap.appendChild(qEl);
 
+  // Options + feedback live in the content column; the Next button goes to
+  // the modal footer (bottom-right) so it never clings to the top.
+  const optionsHost = document.createElement('div');
+  wrap.appendChild(optionsHost);
   const feedback = document.createElement('div');
-  const submitArea = document.createElement('div');
+  wrap.appendChild(feedback);
 
-  const doSubmit = (answer: string | string[]) => {
+  let answered = false;
+  const doSubmit = (answer: string | string[]): void => {
+    if (answered) return;
+    answered = true;
+
     let correct = false;
     if (q.type === 'matching') {
       const a = answer as string[];
@@ -634,22 +1130,19 @@ function _renderQuizQuestion(host: HTMLElement): void {
     }
     state.quizAnswers.push({ question: q, user_answer: answer, correct, feedback: q.explanation });
 
-    feedback.innerHTML = '';
-    feedback.style.cssText = `margin-top:10px;padding:8px 11px;border-radius:6px;font-size:12.5px;line-height:1.5;${
+    feedback.style.cssText = `padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.55;animation:nm-rise 0.2s var(--ease-out) both;${
       correct
         ? 'background:var(--green-bg);color:var(--green-400);border:1px solid rgba(23,138,84,0.35)'
         : 'background:var(--red-bg);color:var(--red-400);border:1px solid rgba(192,52,52,0.32)'
     }`;
     feedback.textContent = `${correct ? 'Correct!' : 'Not quite.'} ${q.explanation}`;
 
-    submitArea.innerHTML = '';
-    const nextBtn = _btn(
-      state.quizIdx < qs.length - 1 ? 'Next question' : 'See score',
-      'primary'
-    );
-    nextBtn.style.cssText += ';margin-top:10px';
+    const last = state.quizIdx >= qs.length - 1;
+    const nextBtn = _btn(last ? 'See score' : 'Next question', 'primary');
+    nextBtn.style.height = 'var(--control-md)';
+    nextBtn.style.padding = '0 20px';
     nextBtn.addEventListener('click', async () => {
-      if (state.quizIdx < qs.length - 1) {
+      if (!last) {
         state.quizIdx++;
         host.innerHTML = '';
         _renderQuizQuestion(host);
@@ -661,17 +1154,23 @@ function _renderQuizQuestion(host: HTMLElement): void {
           await addPoints(xp, 'reader_quiz_complete', state.docTitle).catch(() => null);
         }
         pointsEngine.addPoints(xp, 'reader_quiz');
+        clearStudyFooter();
         host.innerHTML = '';
         _renderQuizReport(host);
       }
     });
-    submitArea.appendChild(nextBtn);
-    _renderAnswerOptions(host, q, doSubmit);
+    if (_studyFooter) {
+      _studyFooter.innerHTML = '';
+      _studyFooter.appendChild(nextBtn);
+      _studyFooter.style.display = 'flex';
+    } else {
+      wrap.appendChild(nextBtn);
+    }
+    setTimeout(() => nextBtn.focus(), 30);
   };
 
-  _renderAnswerOptions(host, q, doSubmit);
-  host.appendChild(feedback);
-  host.appendChild(submitArea);
+  _renderAnswerOptions(optionsHost, q, doSubmit);
+  host.appendChild(wrap);
 }
 
 function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a: string | string[]) => void): void {
@@ -683,7 +1182,7 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
   area.className = 'answer-area';
 
   const OPT_BASE =
-    'padding:8px 11px;border-radius:7px;font-size:12.5px;cursor:pointer;background:var(--bg-base);transition:border-color var(--dur-fast) var(--ease-out);border:1px solid var(--border-subtle);color:var(--text-primary)';
+    'padding:13px 16px;border-radius:9px;font-size:13.5px;line-height:1.45;cursor:pointer;background:var(--bg-base);transition:border-color var(--dur-fast) var(--ease-out),background-color var(--dur-fast) var(--ease-out);border:1px solid var(--border-default);color:var(--text-primary)';
 
   if (q.type === 'multiple_choice' || q.type === 'true_false') {
     const opts = q.type === 'true_false' ? ['True', 'False'] : q.options;
@@ -694,8 +1193,8 @@ function _renderAnswerOptions(host: HTMLElement, q: IQuizQuestion, onSubmit: (a:
       btn.style.cssText =
         OPT_BASE +
         (q.type === 'true_false'
-          ? ';flex:1;text-align:center'
-          : ';margin-bottom:6px');
+          ? ';flex:1;text-align:center;font-weight:500'
+          : ';margin-bottom:8px');
       btn.addEventListener('mouseenter', () => {
         if (!btn.dataset.done) btn.style.borderColor = 'var(--border-strong)';
       });
@@ -845,6 +1344,7 @@ function _renderQuizReport(host: HTMLElement): void {
 // ── Flashcards tab ─────────────────────────────────────────────
 
 function _renderFlashcardsTab(host: HTMLElement): void {
+  clearStudyFooter();
   if (state.fcGenerating) {
     host.appendChild(spinner('Generating flashcards…'));
     return;
@@ -905,14 +1405,13 @@ function _renderFlashcardsTab(host: HTMLElement): void {
     empty.innerHTML =
       '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2"></rect><path d="M22 4v12"></path></svg>' +
       `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${msg}</span>`;
-    const genBtn = _btn('Generate cards', 'primary');
-    genBtn.disabled = !isAiReady();
+    const genBtn = _btn(isAiReady() ? 'Generate cards' : 'Generate demo cards', 'primary');
     genBtn.addEventListener('click', () => _generateFlashcards(host));
     empty.appendChild(genBtn);
     if (!isAiReady()) {
       const w = document.createElement('span');
       w.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
-      w.textContent = 'Set GEMINI_API_KEY to generate flashcards.';
+      w.textContent = 'Demo mode — cards are generated from the section text.';
       empty.appendChild(w);
     }
     host.appendChild(empty);
@@ -958,7 +1457,6 @@ function _renderFlashcardsTab(host: HTMLElement): void {
     _renderFlashcardsTab(host);
   });
   const regenBtn = _btn('Generate more', 'ghost');
-  regenBtn.disabled = !isAiReady();
   regenBtn.addEventListener('click', () => _generateFlashcards(host));
   btnRow.appendChild(studyBtn);
   btnRow.appendChild(regenBtn);
@@ -970,19 +1468,20 @@ function _renderStudyMode(host: HTMLElement): void {
   const total = state.fcStudyCards.length;
 
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:18px';
 
   const progress = document.createElement('span');
   progress.style.cssText =
-    'font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono)';
+    'font-size:11.5px;color:var(--text-quaternary);font-family:var(--font-mono);text-align:center';
   progress.textContent = `Card ${state.fcIdx + 1} / ${total}`;
   wrap.appendChild(progress);
 
   const cardEl = document.createElement('div');
   cardEl.style.cssText = [
-    'min-height:130px;background:var(--surface-card);border:1px solid var(--border-strong);border-radius:10px',
-    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:18px',
-    'cursor:pointer;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,0.06);transition:border-color var(--dur-fast) var(--ease-out)'
+    'min-height:240px;background:var(--surface-card);border:1px solid var(--border-strong);border-radius:12px',
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:28px',
+    'cursor:pointer;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,0.07);transition:border-color var(--dur-fast) var(--ease-out)',
+    'animation:nm-rise 0.2s var(--ease-out) both'
   ].join(';');
   cardEl.addEventListener('mouseenter', () => {
     cardEl.style.borderColor = 'var(--accent)';
@@ -1020,7 +1519,7 @@ function _renderStudyMode(host: HTMLElement): void {
   if (state.fcFlipped) {
     const ratingRow = document.createElement('div');
     ratingRow.style.cssText =
-      'display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px';
+      'display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-top:2px';
     const ratings: Array<[CardRating, string, string]> = [
       ['again', 'Again', 'var(--red-400)'],
       ['good', 'Good', 'var(--text-secondary)'],
@@ -1029,28 +1528,29 @@ function _renderStudyMode(host: HTMLElement): void {
     ];
     ratings.forEach(([rating, label, color]) => {
       const rb = document.createElement('div');
-      rb.style.cssText = `text-align:center;padding:7px 0;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--border-strong);color:${color};transition:background-color var(--dur-fast) var(--ease-out)`;
+      rb.style.cssText = `text-align:center;padding:13px 0;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;border:1px solid var(--border-strong);color:${color};transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)`;
       rb.textContent = label;
       rb.addEventListener('mouseenter', () => {
         rb.style.background = 'var(--alpha-6)';
+        rb.style.borderColor = color;
       });
       rb.addEventListener('mouseleave', () => {
         rb.style.background = 'transparent';
+        rb.style.borderColor = 'var(--border-strong)';
       });
       rb.addEventListener('click', () => _rateCard(card, rating, host));
       ratingRow.appendChild(rb);
     });
     wrap.appendChild(ratingRow);
+  } else {
+    // Placeholder keeps the card vertically centered before flipping.
+    const hint = document.createElement('div');
+    hint.style.cssText =
+      'text-align:center;font-size:12px;color:var(--text-quaternary)';
+    hint.textContent = 'Flip the card, then rate how well you knew it.';
+    wrap.appendChild(hint);
   }
 
-  const exitBtn = _btn('Exit study', 'ghost');
-  exitBtn.addEventListener('click', () => {
-    state.fcStudying = false;
-    state.fcFlipped = false;
-    host.innerHTML = '';
-    _renderFlashcardsTab(host);
-  });
-  wrap.appendChild(exitBtn);
   host.appendChild(wrap);
 }
 
@@ -1091,10 +1591,10 @@ async function _rateCard(card: IFlashcard, rating: CardRating, host: HTMLElement
 
 async function _generateFlashcards(host: HTMLElement): Promise<void> {
   const sec = state.sections[state.currentSection];
-  if (!sec || !isAiReady()) return;
+  if (!sec) return;
   state.fcGenerating = true;
   host.innerHTML = '';
-  host.appendChild(spinner('Generating flashcards…'));
+  host.appendChild(spinner(isAiReady() ? 'Generating flashcards…' : 'Building demo cards…'));
 
   const startIdx = Math.max(0, state.currentSection - 1);
   const endIdx = Math.min(state.sections.length - 1, state.currentSection + 1);
@@ -1106,10 +1606,15 @@ async function _generateFlashcards(host: HTMLElement): Promise<void> {
 Use a different card_type for each card. Cover key concepts, definitions, and relationships.`;
 
   try {
-    const raw = await askAboutCell(ctx, prompt, []);
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('No JSON array');
-    const cards = JSON.parse(match[0]) as Array<{ front: string; back: string; card_type: string }>;
+    let cards: Array<{ front: string; back: string; card_type: string }>;
+    if (isAiReady()) {
+      const raw = await askAboutCell(ctx, prompt, []);
+      const match = raw.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error('No JSON array');
+      cards = JSON.parse(match[0]) as Array<{ front: string; back: string; card_type: string }>;
+    } else {
+      cards = localFlashcards(sec.title, ctx);
+    }
 
     if (isConnected() && state.docId) {
       const inserted = await upsertFlashcardsForSection(state.docId, state.currentSection, sec.title, cards);
@@ -1137,7 +1642,23 @@ Use a different card_type for each card. Cover key concepts, definitions, and re
     }
     pointsEngine.addPoints(15, 'reader_flashcards');
   } catch {
-    // ignore
+    // AI failed — fall back to built-in demo cards so the tool still works.
+    const now = new Date().toISOString();
+    const local = localFlashcards(sec.title, ctx).map((c, i) => ({
+      id: `local-${Date.now()}-${i}`,
+      section_index: state.currentSection,
+      section_title: sec.title,
+      front: c.front,
+      back: c.back,
+      card_type: c.card_type || 'term_definition',
+      due_at: now,
+      interval_days: 0,
+      ease_factor: 2.5,
+      repetitions: 0,
+      review_state: 'new' as const
+    }));
+    state.flashcards = state.flashcards.filter(c => c.section_index !== state.currentSection);
+    state.flashcards.push(...local);
   }
   state.fcGenerating = false;
   host.innerHTML = '';
@@ -1208,6 +1729,34 @@ function _installKeyboard(): void {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     if (['input', 'textarea', 'select'].includes(tag)) return;
     if (!state.doc) return;
+
+    const studyOverlay = document.querySelector('.nm-study-overlay') as
+      | (HTMLElement & { _renderStudyBody?: () => void; _dispose?: () => void })
+      | null;
+
+    // ── Study modal open: keys drive the quiz / flashcards ──
+    if (studyOverlay) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        studyOverlay._dispose?.();
+        return;
+      }
+      if (state.activeTab === 'flashcards' && state.fcStudying) {
+        if (state.fcFlipped) {
+          const c = state.fcStudyCards[state.fcIdx];
+          if (c && e.key === '1') { void _rateCard(c, 'again', _studyBody ?? document.body); }
+          else if (c && e.key === '2') { void _rateCard(c, 'good', _studyBody ?? document.body); }
+          else if (c && e.key === '3') { void _rateCard(c, 'easy', _studyBody ?? document.body); }
+        } else if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          state.fcFlipped = true;
+          studyOverlay._renderStudyBody?.();
+        }
+      }
+      return;
+    }
+
+    // ── Reader (no modal): navigate slides ──
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       const sec = state.sections[state.currentSection];
@@ -1224,29 +1773,16 @@ function _installKeyboard(): void {
       _toggleUnderstood();
     } else if (e.key === 'q' || e.key === 'Q') {
       e.preventDefault();
-      state.activeTab = 'quiz';
-      _render();
+      _openStudy('quiz');
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
-      state.activeTab = 'flashcards';
-      _render();
+      _openStudy('flashcards');
     } else if (e.key === '?') {
       e.preventDefault();
-      _showShortcuts();
+      showReaderShortcuts();
     } else if (e.key === 'Escape') {
       state.isFullscreen = false;
       if (_onToggle) _onToggle(false);
-      _render();
-    }
-    // Flashcard rating during study
-    if (state.fcStudying && state.fcFlipped) {
-      if (e.key === '1') { const c = state.fcStudyCards[state.fcIdx]; if (c) { const p = document.querySelector('.nm-fc-panel') as HTMLElement | null; _rateCard(c, 'again', p ?? document.body); }}
-      else if (e.key === '2') { const c = state.fcStudyCards[state.fcIdx]; if (c) { const p = document.querySelector('.nm-fc-panel') as HTMLElement | null; _rateCard(c, 'good', p ?? document.body); }}
-      else if (e.key === '3') { const c = state.fcStudyCards[state.fcIdx]; if (c) { const p = document.querySelector('.nm-fc-panel') as HTMLElement | null; _rateCard(c, 'easy', p ?? document.body); }}
-    }
-    if (state.fcStudying && !state.fcFlipped && (e.key === ' ' || e.key === 'Enter')) {
-      e.preventDefault();
-      state.fcFlipped = true;
       _render();
     }
   };
@@ -1257,7 +1793,7 @@ function _installKeyboard(): void {
 
 let _kbHandler: ((e: KeyboardEvent) => void) | null = null;
 
-function _showShortcuts(): void {
+export function showReaderShortcuts(): void {
   const overlay = document.createElement('div');
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:2000;background:var(--surface-overlay);display:flex;align-items:center;justify-content:center';
@@ -1267,11 +1803,11 @@ function _showShortcuts(): void {
   const rows = [
     ['← →', 'Previous / next page'],
     ['U', "Toggle 'understood' for this section"],
-    ['Q', 'Quiz tab'],
-    ['F', 'Flashcards tab'],
-    ['Space', 'Flip flashcard'],
+    ['Q', 'Open quiz'],
+    ['F', 'Open flashcards'],
+    ['Space', 'Flip flashcard (in study)'],
     ['1 / 2 / 3', 'Rate card: Again / Good / Easy'],
-    ['Esc', 'Close this / back to library']
+    ['Esc', 'Close study / back to library']
   ];
   box.innerHTML =
     '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">Keyboard shortcuts</span>' +

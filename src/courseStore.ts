@@ -22,12 +22,25 @@ const courses: IUserCourse[] = [
 
 let activeId = 'demo';
 
+/** Fallback so screens never crash when the user has left every course. */
+const NO_COURSE: IUserCourse = {
+  id: 'none',
+  code: '',
+  isOwn: false,
+  isDemo: false,
+  data: { subject: 'No course', teacher: '', currentWeek: 1, weeks: [], notebooks: {} }
+};
+
 export function allCourses(): IUserCourse[] {
   return courses;
 }
 
+export function hasCourses(): boolean {
+  return courses.length > 0;
+}
+
 export function activeCourse(): IUserCourse {
-  return courses.find(c => c.id === activeId) ?? courses[0];
+  return courses.find(c => c.id === activeId) ?? courses[0] ?? NO_COURSE;
 }
 
 export function activeData(): ICourse {
@@ -37,6 +50,35 @@ export function activeData(): ICourse {
 export function setActiveCourse(id: string): void {
   if (courses.some(c => c.id === id)) {
     activeId = id;
+  }
+}
+
+/** Courses the signed-in user teaches (created themselves). */
+export function ownedCourses(): IUserCourse[] {
+  return courses.filter(c => c.isOwn);
+}
+
+/** Remove a course you created. The seeded demo course can't be removed. */
+export function deleteCourse(id: string): void {
+  const idx = courses.findIndex(c => c.id === id);
+  if (idx < 0 || courses[idx].isDemo) {
+    return;
+  }
+  courses.splice(idx, 1);
+  if (activeId === id) {
+    activeId = courses[0]?.id ?? 'none';
+  }
+}
+
+/** Leave a course you joined (or the demo). Own courses use deleteCourse. */
+export function leaveCourse(id: string): void {
+  const idx = courses.findIndex(c => c.id === id);
+  if (idx < 0) {
+    return;
+  }
+  courses.splice(idx, 1);
+  if (activeId === id) {
+    activeId = courses[0]?.id ?? 'none';
   }
 }
 

@@ -1,6 +1,7 @@
 import { NotebookMindApp } from './nbApp';
-import { button, backLink, avatar, maxWidth } from './uiKit';
+import { button, avatar, maxWidth, pageHeader, tag } from './uiKit';
 import { MATES, invited, profile } from './friendsData';
+import { openProfileModal } from './profileModal';
 
 /** Friends & profile — prototype screen (reached from the Leaderboard). */
 export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
@@ -8,70 +9,36 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
   root.style.cssText +=
     ';display:flex;flex-direction:column;gap:22px;padding-bottom:32px';
 
-  // Header
-  const head = document.createElement('div');
-  head.style.cssText = 'display:flex;flex-direction:column;gap:6px';
-  head.appendChild(backLink('Back to Leaderboard', () => app.navigate('board')));
-  head.innerHTML +=
-    '<h1 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;color:var(--text-primary)">Friends &amp; profile</h1>' +
-    '<span style="font-size:13px;color:var(--text-tertiary)">Manage who you compare with. Comparison is opt-in and mutual.</span>';
-  root.appendChild(head);
+  const repaint = (): void => {
+    host.innerHTML = '';
+    renderFriends(host, app);
+  };
+
+  // Header — shared pageHeader so "Back to…" spacing matches every screen.
+  root.appendChild(
+    pageHeader('Friends & profile', {
+      subtitle: 'Manage who you compare with. Comparison is opt-in and mutual.',
+      back: () => app.navigate('board'),
+      backLabel: 'Leaderboard'
+    })
+  );
 
   // ── Profile ───────────────────────────────────────────────────
   const profCard = document.createElement('div');
   profCard.style.cssText =
-    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px';
-  profCard.innerHTML =
-    '<span style="font-size:12.5px;font-weight:600;color:var(--text-secondary)">Your profile</span>';
-
-  const profRow = document.createElement('div');
-  profRow.style.cssText = 'display:flex;align-items:center;gap:16px';
-  profRow.appendChild(avatar(profile.name, 64));
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;align-items:center;gap:16px';
+  profCard.appendChild(avatar(profile.name, 56, profile.avatarUrl));
 
   const profCol = document.createElement('div');
-  profCol.style.cssText =
-    'display:flex;flex-direction:column;gap:6px;flex:1;min-width:0';
+  profCol.style.cssText = 'display:flex;flex-direction:column;gap:3px;flex:1;min-width:0';
   profCol.innerHTML =
-    '<span style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary)">Display name</span>';
-  const nameRow = document.createElement('div');
-  nameRow.style.cssText = 'display:flex;align-items:center;gap:12px';
-  const nameInput = document.createElement('input');
-  nameInput.value = profile.name;
-  nameInput.placeholder = 'Your name';
-  nameInput.style.cssText =
-    'flex:1;min-width:0;box-sizing:border-box;height:38px;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:0 12px;font-size:13px;font-family:var(--font-sans);outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)';
-  nameInput.addEventListener('focus', () => {
-    nameInput.style.borderColor = 'var(--accent)';
-    nameInput.style.boxShadow = '0 0 0 3px var(--brand-glow)';
-  });
-  nameInput.addEventListener('blur', () => {
-    nameInput.style.borderColor = 'var(--border-strong)';
-    nameInput.style.boxShadow = 'none';
-  });
-  const saveBtn = button('Save', 'primary');
-  saveBtn.style.height = '38px';
-  nameRow.appendChild(nameInput);
-  nameRow.appendChild(saveBtn);
-  profCol.appendChild(nameRow);
-  const notice = document.createElement('span');
-  notice.style.cssText = 'font-size:12px;color:var(--green-400);min-height:15px';
-  profCol.appendChild(notice);
-  saveBtn.addEventListener('click', () => {
-    const v = nameInput.value.trim();
-    if (!v) {
-      notice.style.color = 'var(--red-400)';
-      notice.textContent = "Name can't be empty.";
-      return;
-    }
-    profile.name = v;
-    notice.style.color = 'var(--green-400)';
-    notice.textContent = 'Profile saved.';
-    // Repaint so the avatar initials update.
-    host.innerHTML = '';
-    renderFriends(host, app);
-  });
-  profRow.appendChild(profCol);
-  profCard.appendChild(profRow);
+    `<span style="font-size:15px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${profile.name}</span>` +
+    `<span style="font-size:12.5px;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${profile.email || 'Demo mode — no account connected'}</span>`;
+  profCard.appendChild(profCol);
+
+  const editBtn = button('Edit profile', 'secondary');
+  editBtn.addEventListener('click', () => openProfileModal(repaint));
+  profCard.appendChild(editBtn);
   root.appendChild(profCard);
 
   // ── Add a friend ──────────────────────────────────────────────
@@ -130,54 +97,75 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
   const listWrap = document.createElement('div');
   listWrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   listWrap.innerHTML =
-    '<span style="font-size:13px;font-weight:600;color:var(--text-secondary)">Friends &amp; sharing</span>';
+    '<span style="font-size:13px;font-weight:600;color:var(--text-secondary)">Friends &amp; sharing</span>' +
+    '<span style="font-size:12px;color:var(--text-tertiary);line-height:1.5;margin-top:-4px">You only see a friend’s stats once <b>both</b> of you share. Use the button on each row to share, accept, or take your sharing back at any time.</span>';
   const listBox = document.createElement('div');
   listBox.style.cssText =
     'background:var(--bg-panel);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
   listWrap.appendChild(listBox);
   root.appendChild(listWrap);
 
+  interface IRowSpec {
+    stateLabel: string;
+    stateTone: 'success' | 'warning' | 'accent' | 'neutral';
+    btnLabel: string;
+    btnVariant: 'primary' | 'secondary';
+    highlight: boolean;
+  }
+
   function paintMates(): void {
     listBox.innerHTML = '';
     MATES.forEach((m, idx) => {
-      let stateLabel: string;
-      let stateColor: string;
-      let btnLabel: string;
-      let btnVariant: 'primary' | 'secondary' | 'ghost' = 'secondary';
-      let highlight = false;
+      let spec: IRowSpec;
       if (m.me && m.them) {
-        stateLabel = 'Sharing with each other';
-        stateColor = 'var(--green-400)';
-        btnLabel = 'Stop sharing';
-        btnVariant = 'ghost';
+        spec = {
+          stateLabel: 'Sharing both ways',
+          stateTone: 'success',
+          btnLabel: 'Stop sharing',
+          btnVariant: 'secondary',
+          highlight: false
+        };
       } else if (m.me && !m.them) {
-        stateLabel = 'You shared — waiting for them';
-        stateColor = 'var(--yellow-500)';
-        btnLabel = 'Withdraw';
-        btnVariant = 'ghost';
+        spec = {
+          stateLabel: 'You shared — waiting for them',
+          stateTone: 'warning',
+          btnLabel: 'Withdraw request',
+          btnVariant: 'secondary',
+          highlight: false
+        };
       } else if (!m.me && m.them) {
-        stateLabel = 'They shared with you';
-        stateColor = 'var(--accent-text)';
-        btnLabel = 'Share back to compare';
-        btnVariant = 'primary';
-        highlight = true;
+        spec = {
+          stateLabel: 'Wants to compare with you',
+          stateTone: 'accent',
+          btnLabel: 'Accept & share back',
+          btnVariant: 'primary',
+          highlight: true
+        };
       } else {
-        stateLabel = 'Not sharing';
-        stateColor = 'var(--text-quaternary)';
-        btnLabel = 'Share my stats';
+        spec = {
+          stateLabel: 'Not sharing',
+          stateTone: 'neutral',
+          btnLabel: 'Share my stats',
+          btnVariant: 'secondary',
+          highlight: false
+        };
       }
 
       const row = document.createElement('div');
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 16px;${idx > 0 ? 'border-top:1px solid var(--border-subtle);' : ''}${highlight ? 'background:var(--accent-subtle-bg)' : ''}`;
-      row.appendChild(avatar(m.name, 28));
+      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 16px;${idx > 0 ? 'border-top:1px solid var(--border-subtle);' : ''}${spec.highlight ? 'background:var(--accent-subtle-bg)' : ''}`;
+      row.appendChild(avatar(m.name, 30));
       const col = document.createElement('div');
       col.style.cssText =
-        'display:flex;flex-direction:column;gap:2px;flex:1;min-width:0';
-      col.innerHTML =
-        `<span style="font-size:13px;font-weight:500;color:var(--text-primary)">${m.name}</span>` +
-        `<span style="font-size:11.5px;font-weight:500;color:${stateColor}">${stateLabel}</span>`;
+        'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText =
+        'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      nameEl.textContent = m.name;
+      col.appendChild(nameEl);
+      col.appendChild(tag(spec.stateLabel, spec.stateTone, true));
       row.appendChild(col);
-      const action = button(btnLabel, btnVariant);
+
+      const action = button(spec.btnLabel, spec.btnVariant);
       action.style.height = 'var(--control-sm)';
       action.style.fontSize = '12px';
       action.addEventListener('click', () => {
@@ -191,16 +179,19 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
     invited.forEach((f, i) => {
       const row = document.createElement('div');
       row.style.cssText =
-        'display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--border-subtle);opacity:0.75';
-      row.appendChild(avatar(f.name, 28));
+        'display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--border-subtle)';
+      row.appendChild(avatar(f.name, 30));
       const col = document.createElement('div');
       col.style.cssText =
-        'display:flex;flex-direction:column;gap:2px;flex:1;min-width:0';
-      col.innerHTML =
-        `<span style="font-size:13px;font-weight:500;color:var(--text-primary)">${f.name}</span>` +
-        '<span style="font-size:11.5px;font-weight:500;color:var(--text-quaternary)">Invited · waiting for them to join</span>';
+        'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText =
+        'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      nameEl.textContent = f.name;
+      col.appendChild(nameEl);
+      col.appendChild(tag('Invited · waiting to join', 'neutral', true));
       row.appendChild(col);
-      const cancel = button('Cancel invite', 'ghost');
+      const cancel = button('Cancel invite', 'secondary');
       cancel.style.height = 'var(--control-sm)';
       cancel.style.fontSize = '12px';
       cancel.addEventListener('click', () => {

@@ -4,7 +4,7 @@ import { renderLearn } from './screenLearn';
 import { renderExplain } from './screenExplain';
 import { demoAssignment } from './demoData';
 import { summarizeNotebook } from './gemini';
-import { backLink, segmented, maxWidth } from './uiKit';
+import { backArrow, segmented, maxWidth } from './uiKit';
 
 type Mode = 'learn' | 'explain';
 
@@ -36,16 +36,15 @@ export function renderSession(host: HTMLElement, app: NotebookMindApp): void {
   // ── Header block (centered 780px column) ──────────────────────
   const head = document.createElement('div');
   head.style.cssText =
-    'max-width:780px;width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:10px';
-
-  head.appendChild(backLink('Back to Course', () => app.navigate('home')));
+    'max-width:780px;width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px';
 
   const titleRow = document.createElement('div');
   titleRow.style.cssText =
-    'display:flex;align-items:center;gap:12px;flex-wrap:wrap';
+    'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+  titleRow.appendChild(backArrow(() => app.navigate('home'), 'Back to Course'));
   const h1 = document.createElement('h1');
   h1.style.cssText =
-    'margin:0;font-size:20px;font-weight:600;letter-spacing:-0.018em;flex:1;min-width:200px;color:var(--text-primary)';
+    'margin:0;font-size:20px;font-weight:600;letter-spacing:-0.018em;flex:1;min-width:160px;color:var(--text-primary)';
   h1.textContent = doc.name;
   titleRow.appendChild(h1);
   const count = document.createElement('span');

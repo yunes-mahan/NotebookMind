@@ -1,6 +1,7 @@
 import { Widget } from '@lumino/widgets';
 import { isConnected, signIn, signUp, getCurrentUser } from './supabase';
-import { setUser } from './friendsData';
+import { setUser, UserRole } from './friendsData';
+import { logoSvg } from './uiKit';
 
 /** Prototype fallback: derive a display name from the email prefix. */
 function nameFromEmail(email: string): string {
@@ -63,12 +64,51 @@ export class LoginWidget extends Widget {
       'display:flex;flex-direction:column;gap:6px;align-items:center;text-align:center;margin-bottom:18px';
     logoRow.innerHTML = `
       <div style="width:34px;height:34px;border-radius:9px;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px var(--brand-glow)">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        ${logoSvg(18)}
       </div>
       <span style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)">NotebookMind</span>
       <span style="font-size:12.5px;color:var(--text-tertiary)">Learn your course notebooks, cell by cell.</span>
     `;
     card.appendChild(logoRow);
+
+    // Role selector — students learn; teachers author courses & notebooks.
+    let role: UserRole = 'student';
+    const roleLbl = document.createElement('div');
+    roleLbl.style.cssText =
+      'font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px';
+    roleLbl.textContent = 'I am a…';
+    card.appendChild(roleLbl);
+    const roleBar = document.createElement('div');
+    roleBar.style.cssText =
+      'display:flex;gap:2px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:3px;margin-bottom:16px';
+    const roleStudent = this._tabBtn('Student', true);
+    const roleTeacher = this._tabBtn('Teacher', false);
+    roleBar.appendChild(roleStudent);
+    roleBar.appendChild(roleTeacher);
+    card.appendChild(roleBar);
+    const roleHint = document.createElement('div');
+    roleHint.style.cssText =
+      'font-size:11.5px;color:var(--text-quaternary);margin:-10px 0 14px;line-height:1.45';
+    roleHint.textContent = 'Join courses and learn from notebooks.';
+    card.appendChild(roleHint);
+    const paintRole = (r: UserRole): void => {
+      role = r;
+      const on = (b: HTMLButtonElement, active: boolean): void => {
+        b.style.background = active ? 'var(--bg-panel)' : 'transparent';
+        b.style.boxShadow = active
+          ? '0 1px 2px rgba(0,0,0,0.14), 0 0 0 1px var(--border-default)'
+          : 'none';
+        b.style.color = active ? 'var(--text-primary)' : 'var(--text-tertiary)';
+      };
+      on(roleStudent, r === 'student');
+      on(roleTeacher, r === 'teacher');
+      roleHint.textContent =
+        r === 'teacher'
+          ? 'Create courses, upload notebooks & slides, and see class analytics.'
+          : 'Join courses and learn from notebooks.';
+    };
+    roleStudent.addEventListener('click', () => paintRole('student'));
+    roleTeacher.addEventListener('click', () => paintRole('teacher'));
 
     // Tab switcher (Sign In / Create Account)
     let mode: 'signin' | 'signup' = 'signin';
@@ -183,7 +223,8 @@ export class LoginWidget extends Widget {
         }
         setUser(
           mode === 'signup' && name ? name : nameFromEmail(email),
-          email
+          email,
+          role
         );
         this._onLogin();
         this.dispose();
@@ -239,7 +280,8 @@ export class LoginWidget extends Widget {
         (u?.user_metadata?.display_name as string) ||
           name ||
           nameFromEmail(email),
-        email
+        email,
+        role
       );
       this._onLogin();
       this.dispose();

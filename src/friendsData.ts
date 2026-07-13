@@ -23,14 +23,42 @@ export const MATES: IMate[] = [
 
 export const invited: Array<{ name: string; email: string }> = [];
 
+export type UserRole = 'student' | 'teacher';
+
 /** Local profile / signed-in user (demo mode — no backend). */
-export const profile = { name: 'Guest', email: '', signedIn: false };
+export const profile: {
+  name: string;
+  email: string;
+  signedIn: boolean;
+  avatarUrl: string;
+  role: UserRole;
+  onboarded: boolean;
+} = {
+  name: 'Guest',
+  email: '',
+  signedIn: false,
+  avatarUrl: '',
+  role: 'student',
+  onboarded: false
+};
 
 /** Set the signed-in user and notify the shell (sidebar account row). */
-export function setUser(name: string, email: string): void {
+export function setUser(name: string, email: string, role: UserRole = 'student'): void {
   profile.name = name;
   profile.email = email;
+  profile.role = role;
   profile.signedIn = true;
+  document.dispatchEvent(new CustomEvent('notebookmind:user'));
+}
+
+/** Update display name / avatar and notify the shell to repaint. */
+export function setProfile(patch: { name?: string; avatarUrl?: string }): void {
+  if (typeof patch.name === 'string') {
+    profile.name = patch.name;
+  }
+  if (typeof patch.avatarUrl === 'string') {
+    profile.avatarUrl = patch.avatarUrl;
+  }
   document.dispatchEvent(new CustomEvent('notebookmind:user'));
 }
 
@@ -38,6 +66,9 @@ export function clearUser(): void {
   profile.name = 'Guest';
   profile.email = '';
   profile.signedIn = false;
+  profile.avatarUrl = '';
+  profile.role = 'student';
+  profile.onboarded = false;
   document.dispatchEvent(new CustomEvent('notebookmind:user'));
 }
 

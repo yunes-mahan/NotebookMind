@@ -4,6 +4,15 @@
    every screen composes these so the whole app reads as one language.
    ───────────────────────────────────────────────────────────────────────── */
 
+/** NotebookMind brand mark (document icon, fill-based, viewBox 0 0 24 24). */
+export const NM_LOGO_PATH =
+  'm14 7v-6.54a6.977 6.977 0 0 1 2.465 1.59l3.484 3.486a6.954 6.954 0 0 1 1.591 2.464h-6.54a1 1 0 0 1 -1-1zm8 3.485v8.515a5.006 5.006 0 0 1 -5 5h-10a5.006 5.006 0 0 1 -5-5v-14a5.006 5.006 0 0 1 5-5h4.515c.163 0 .324.013.485.024v6.976a3 3 0 0 0 3 3h6.976c.011.161.024.322.024.485zm-8 8.515a1 1 0 0 0 -1-1h-5a1 1 0 0 0 0 2h5a1 1 0 0 0 1-1zm3-4a1 1 0 0 0 -1-1h-8a1 1 0 0 0 0 2h8a1 1 0 0 0 1-1z';
+
+/** Brand logo SVG markup at a given pixel size (white glyph, for accent tiles). */
+export function logoSvg(size: number, color = '#fff'): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}"><path d="${NM_LOGO_PATH}"></path></svg>`;
+}
+
 export function button(
   label: string,
   variant: 'primary' | 'ghost' | 'secondary' | 'accent' = 'primary'
@@ -151,7 +160,7 @@ const AVATAR_PALETTE = [
   '#26A69A'
 ];
 
-export function avatar(name: string, size = 28): HTMLElement {
+export function avatar(name: string, size = 28, imageUrl?: string): HTMLElement {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = (hash * 31 + name.charCodeAt(i)) | 0;
@@ -164,16 +173,22 @@ export function avatar(name: string, size = 28): HTMLElement {
   el.style.cssText = [
     `width:${size}px;height:${size}px;border-radius:9999px;flex-shrink:0`,
     `background:${color};color:#fff;font-weight:600;font-size:${Math.round(size * 0.36)}px`,
-    'display:flex;align-items:center;justify-content:center;font-family:var(--font-sans);user-select:none'
+    'display:flex;align-items:center;justify-content:center;font-family:var(--font-sans);user-select:none;overflow:hidden;background-size:cover;background-position:center'
   ].join(';');
-  el.textContent = initials;
+  if (imageUrl) {
+    el.style.backgroundImage = `url("${imageUrl}")`;
+  } else {
+    el.textContent = initials;
+  }
   el.title = name;
   return el;
 }
 
 export function maxWidth(host: HTMLElement, width = 760): HTMLElement {
   const inner = document.createElement('div');
-  inner.style.cssText = `max-width:${width}px;margin:0 auto`;
+  // width:100% keeps the column at full `width` even when the host is a flex
+  // column (auto margins alone would collapse it to content width).
+  inner.style.cssText = `width:100%;max-width:${width}px;margin:0 auto;box-sizing:border-box`;
   host.appendChild(inner);
   return inner;
 }
@@ -221,7 +236,31 @@ export function backLink(label: string, onClick: () => void): HTMLElement {
   return el;
 }
 
-/** Page-level header: optional back link, 22px title, subtitle + right actions. */
+/** Back-arrow button placed inline to the left of a page/section title.
+ * Keeps the vertical rhythm identical across screens (no separate row). */
+export function backArrow(onClick: () => void, label = 'Back'): HTMLElement {
+  const el = document.createElement('span');
+  el.title = label;
+  el.style.cssText = [
+    'display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto',
+    'width:26px;height:26px;border-radius:7px;color:var(--text-tertiary);cursor:pointer;margin-left:-2px',
+    'transition:background-color var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out)'
+  ].join(';');
+  el.innerHTML =
+    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>';
+  el.addEventListener('mouseenter', () => {
+    el.style.background = 'var(--alpha-8)';
+    el.style.color = 'var(--text-primary)';
+  });
+  el.addEventListener('mouseleave', () => {
+    el.style.background = 'transparent';
+    el.style.color = 'var(--text-tertiary)';
+  });
+  el.addEventListener('click', onClick);
+  return el;
+}
+
+/** Page-level header: optional inline back arrow, 22px title, subtitle + actions. */
 export function pageHeader(
   title: string,
   opts: {
@@ -232,25 +271,26 @@ export function pageHeader(
   } = {}
 ): HTMLElement {
   const outer = document.createElement('div');
-  outer.style.cssText =
-    'margin-bottom:20px;display:flex;flex-direction:column;gap:8px';
-
-  if (opts.back) {
-    outer.appendChild(
-      backLink(`Back to ${opts.backLabel ?? 'Course'}`, opts.back)
-    );
-  }
+  outer.style.cssText = 'margin-bottom:20px;display:flex;flex-direction:column;gap:8px';
 
   const wrap = document.createElement('div');
   wrap.style.cssText =
     'display:flex;align-items:flex-end;justify-content:space-between;gap:16px';
   const left = document.createElement('div');
   left.style.cssText = 'min-width:0;display:flex;flex-direction:column;gap:6px';
+
+  // Title row: optional inline back arrow + 22px title.
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0';
+  if (opts.back) {
+    titleRow.appendChild(backArrow(opts.back, `Back to ${opts.backLabel ?? 'Course'}`));
+  }
   const h = document.createElement('h1');
   h.style.cssText =
-    'margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;line-height:1.2;color:var(--text-primary)';
+    'margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;line-height:1.2;color:var(--text-primary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   h.textContent = title;
-  left.appendChild(h);
+  titleRow.appendChild(h);
+  left.appendChild(titleRow);
   if (opts.subtitle) {
     const s = document.createElement('div');
     s.style.cssText = 'font-size:13px;color:var(--text-tertiary);line-height:1.5';
