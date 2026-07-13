@@ -3,7 +3,7 @@ import { ICourseNotebook } from './courseData';
 import { activeData } from './courseStore';
 import { loadNotebook } from './nbSource';
 import { explainConnection } from './gemini';
-import { backLink, statusIcon, maxWidth } from './uiKit';
+import { backArrow, statusIcon, maxWidth } from './uiKit';
 
 // Session-local: which connectors are expanded / loading.
 const openConn = new Map<number, string>();
@@ -24,16 +24,19 @@ export function renderCourseMap(host: HTMLElement, app: NotebookMindApp): void {
 
   // Header
   const head = document.createElement('div');
-  head.style.cssText = 'display:flex;flex-direction:column;gap:8px';
-  head.appendChild(backLink('Back to Course', () => app.navigate('home')));
+  head.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex;align-items:center;gap:10px';
+  titleRow.appendChild(backArrow(() => app.navigate('home'), 'Back to Course'));
   const h1 = document.createElement('h1');
   h1.style.cssText =
     'margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;color:var(--text-primary)';
   h1.textContent = 'Course map';
+  titleRow.appendChild(h1);
   const sub = document.createElement('span');
   sub.style.cssText = 'font-size:13px;color:var(--text-tertiary)';
   sub.textContent = 'How each notebook builds on the ones before it.';
-  head.appendChild(h1);
+  head.appendChild(titleRow);
   head.appendChild(sub);
   root.appendChild(head);
 

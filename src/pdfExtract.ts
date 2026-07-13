@@ -10,6 +10,10 @@ export interface IPageData {
   imageBase64: string | null;
   width: number;
   height: number;
+  // When this page comes from a structured lecture deck, the original slide
+  // is attached so the reader can render it richly (imported type to avoid a
+  // hard dependency cycle).
+  deckSlide?: import('./slidesData').ISlide;
 }
 
 export interface IExtractResult {

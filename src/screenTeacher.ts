@@ -7,12 +7,13 @@ import {
   SUBMISSIONS,
   insightsContext
 } from './teacherData';
-import { teacherInsights, teacherAsk, generateChallenge } from './gemini';
+import { teacherInsights, teacherAsk, generateChallenge, isAiReady } from './gemini';
 import { renderMarkdown } from './markdown';
-import { loadNotebook } from './nbSource';
+import { loadNotebook, parseUploadedNotebook, INbDoc } from './nbSource';
 import {
   cellTitle,
   setAuthoredChallenge,
+  demoChallenge,
   IAuthoredChallenge
 } from './demoData';
 import { Difficulty } from './challenge';
@@ -21,10 +22,11 @@ import {
   infoBox,
   spinner,
   maxWidth,
-  backLink,
+  backArrow,
   segmented,
   tag,
-  statusIcon
+  statusIcon,
+  celebrate
 } from './uiKit';
 import { extractPdfFull } from './pdfExtract';
 import { upsertCourseWeekSlides } from './supabaseDB';
@@ -32,7 +34,7 @@ import { isConnected } from './supabase';
 
 const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
-type Tab = 'overview' | 'content' | 'tasks';
+type Tab = 'overview' | 'content';
 
 function basename(p: string): string {
   return p.split('/').pop() ?? p;
@@ -44,38 +46,78 @@ export function renderTeacher(host: HTMLElement, app: NotebookMindApp): void {
     ';display:flex;flex-direction:column;gap:18px;padding-bottom:64px';
   let tab: Tab = 'overview';
 
-  // Header: back link · title + "Aggregates only" badge · segmented tabs
+  // Header: back link · (title + badge + course line) left / tabs right
   const head = document.createElement('div');
   head.style.cssText = 'display:flex;flex-direction:column;gap:8px';
-  head.appendChild(backLink('Back to Course', () => app.navigate('home')));
+
+  const headRow = document.createElement('div');
+  headRow.style.cssText =
+    'display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap';
+
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;flex-direction:column;gap:6px;min-width:0';
   const titleRow = document.createElement('div');
-  titleRow.style.cssText = 'display:flex;align-items:center;gap:12px';
+  titleRow.style.cssText = 'display:flex;align-items:center;gap:10px';
+  titleRow.appendChild(backArrow(() => app.navigate('home'), 'Back to Course'));
   const h1 = document.createElement('h1');
   h1.style.cssText =
     'margin:0;font-size:22px;font-weight:600;letter-spacing:-0.018em;color:var(--text-primary)';
   h1.textContent = 'Teacher dashboard';
   titleRow.appendChild(h1);
   titleRow.appendChild(tag('Aggregates only', 'success'));
-  head.appendChild(titleRow);
-  const courseLine = document.createElement('span');
-  courseLine.style.cssText = 'font-size:13px;color:var(--text-tertiary)';
+  left.appendChild(titleRow);
   const ucHead = activeCourse();
-  courseLine.textContent = ucHead.isOwn
-    ? `${ucHead.data.subject} · you teach this course · invite code ${ucHead.code}`
-    : `${ucHead.data.subject} · ${ucHead.data.teacher}`;
-  head.appendChild(courseLine);
+  const courseLine = document.createElement('div');
+  courseLine.style.cssText =
+    'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  const subj = document.createElement('span');
+  subj.style.cssText = 'font-size:13px;font-weight:500;color:var(--text-secondary)';
+  subj.textContent = ucHead.data.subject;
+  courseLine.appendChild(subj);
+  if (ucHead.isOwn) {
+    courseLine.appendChild(tag('You teach', 'accent', true));
+    // Invite-code chip with click-to-copy
+    const chip = document.createElement('span');
+    chip.style.cssText =
+      'display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-tertiary);background:var(--bg-panel);border:1px solid var(--border-default);border-radius:7px;padding:3px 8px;cursor:pointer;transition:border-color var(--dur-fast) var(--ease-out)';
+    const setChip = (copied: boolean): void => {
+      chip.innerHTML =
+        '<span style="color:var(--text-quaternary)">Invite code</span>' +
+        `<span style="font-family:var(--font-mono);font-weight:600;letter-spacing:0.06em;color:var(--accent-text)">${ucHead.code}</span>` +
+        (copied
+          ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green-400)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>');
+    };
+    setChip(false);
+    chip.title = 'Copy invite code';
+    chip.addEventListener('mouseenter', () => (chip.style.borderColor = 'var(--border-strong)'));
+    chip.addEventListener('mouseleave', () => (chip.style.borderColor = 'var(--border-default)'));
+    chip.addEventListener('click', () => {
+      void navigator.clipboard?.writeText(ucHead.code).catch(() => undefined);
+      setChip(true);
+      setTimeout(() => setChip(false), 1400);
+    });
+    courseLine.appendChild(chip);
+  } else {
+    const by = document.createElement('span');
+    by.style.cssText = 'font-size:13px;color:var(--text-tertiary)';
+    by.textContent = `· ${ucHead.data.teacher}`;
+    courseLine.appendChild(by);
+  }
+  left.appendChild(courseLine);
+  headRow.appendChild(left);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
-    { id: 'content', label: 'Weeks & content' },
-    { id: 'tasks', label: 'Tasks' }
+    { id: 'content', label: 'Weeks & content' }
   ];
   const seg = segmented(tabs, tab, id => {
     tab = id as Tab;
     render();
   });
-  seg.style.alignSelf = 'flex-start';
-  head.appendChild(seg);
+  seg.style.flexShrink = '0';
+  headRow.appendChild(seg);
+  head.appendChild(headRow);
   root.appendChild(head);
 
   const body = document.createElement('div');
@@ -85,10 +127,8 @@ export function renderTeacher(host: HTMLElement, app: NotebookMindApp): void {
     body.innerHTML = '';
     if (tab === 'overview') {
       renderOverview(body);
-    } else if (tab === 'content') {
-      renderContent(body);
     } else {
-      renderTasks(body, app);
+      renderContent(body, app);
     }
   }
   render();
@@ -96,14 +136,25 @@ export function renderTeacher(host: HTMLElement, app: NotebookMindApp): void {
 
 function field(labelText: string, el: HTMLElement): HTMLElement {
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'margin-bottom:10px';
+  wrap.style.cssText = 'margin-bottom:12px;display:flex;flex-direction:column;gap:5px';
   const l = document.createElement('div');
   l.style.cssText =
-    'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--nm-fg-muted);margin-bottom:4px';
+    'font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-quaternary)';
   l.textContent = labelText;
   wrap.appendChild(l);
   wrap.appendChild(el);
   return wrap;
+}
+
+function _focusable(el: HTMLInputElement | HTMLTextAreaElement): void {
+  el.addEventListener('focus', () => {
+    el.style.borderColor = 'var(--accent)';
+    el.style.boxShadow = 'var(--ring)';
+  });
+  el.addEventListener('blur', () => {
+    el.style.borderColor = 'var(--border-default)';
+    el.style.boxShadow = 'none';
+  });
 }
 
 function textInput(value = ''): HTMLInputElement {
@@ -111,7 +162,8 @@ function textInput(value = ''): HTMLInputElement {
   i.type = 'text';
   i.value = value;
   i.style.cssText =
-    'width:100%;box-sizing:border-box;font-family:var(--nm-font-sans);font-size:13px;padding:8px 10px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);outline:none;color:var(--nm-fg)';
+    'width:100%;box-sizing:border-box;height:var(--control-md);padding:0 11px;font-family:var(--font-sans);font-size:13px;border:1px solid var(--border-default);border-radius:var(--radius-control);outline:none;color:var(--text-primary);background:var(--surface-input);transition:border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out)';
+  _focusable(i);
   return i;
 }
 
@@ -120,7 +172,8 @@ function textArea(value = '', rows = 4): HTMLTextAreaElement {
   t.value = value;
   t.rows = rows;
   t.style.cssText =
-    'width:100%;box-sizing:border-box;resize:vertical;font-family:var(--nm-font-sans);font-size:13px;padding:8px 10px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);outline:none;color:var(--nm-fg);line-height:1.5';
+    'width:100%;box-sizing:border-box;resize:vertical;font-family:var(--font-sans);font-size:13px;padding:9px 11px;border:1px solid var(--border-default);border-radius:var(--radius-control);outline:none;color:var(--text-primary);background:var(--surface-input);line-height:1.55;transition:border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out)';
+  _focusable(t);
   return t;
 }
 
@@ -388,9 +441,29 @@ function teacherChat(): HTMLElement {
 // Session stores: expanded rows · timed releases · uploaded material names.
 const tExpand = new Map<string, boolean>();
 const tSchedules = new Map<string, string>();
-const tFiles = new Map<number, string[]>();
+const tEditWeek = new Set<number>();
+// Teacher-uploaded notebooks (session-scoped): notebook id → parsed cells.
+const uploadedDocs = new Map<string, INbDoc>();
 
-function renderContent(host: HTMLElement): void {
+/** Keep week numbers contiguous (1..n) and notebook.week in sync after edits. */
+function renumberWeeks(COURSE: ReturnType<typeof activeData>): void {
+  COURSE.weeks.forEach((w, i) => {
+    const newNum = i + 1;
+    w.week = newNum;
+    w.notebookIds.forEach(id => {
+      const nb = COURSE.notebooks[id];
+      if (nb) {
+        nb.week = newNum;
+      }
+    });
+  });
+  COURSE.currentWeek = Math.min(
+    Math.max(1, COURSE.currentWeek),
+    Math.max(1, COURSE.weeks.length)
+  );
+}
+
+function renderContent(host: HTMLElement, app: NotebookMindApp): void {
   const COURSE = activeData();
   host.style.cssText = 'display:flex;flex-direction:column;gap:10px';
 
@@ -405,68 +478,118 @@ function renderContent(host: HTMLElement): void {
 
   const repaint = (): void => {
     host.innerHTML = '';
-    renderContent(host);
+    renderContent(host, app);
   };
 
-  // Current-week picker chips
-  const top = document.createElement('div');
-  top.style.cssText =
-    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap';
-  const lbl = document.createElement('span');
-  lbl.style.cssText = 'font-size:13px;font-weight:500;color:var(--text-secondary)';
-  lbl.textContent = 'Current week';
-  top.appendChild(lbl);
-  const picks = document.createElement('div');
-  picks.style.cssText = 'display:flex;gap:4px';
-  COURSE.weeks.forEach(w => {
-    const p = document.createElement('span');
-    p.textContent = String(w.week);
-    const on = COURSE.currentWeek === w.week;
-    p.style.cssText =
-      'width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--font-mono);' +
-      (on
-        ? 'background:var(--accent);color:#fff'
-        : 'background:var(--bg-panel);color:var(--text-tertiary);border:1px solid var(--border-subtle)');
-    p.addEventListener('click', () => {
-      COURSE.currentWeek = w.week;
-      repaint();
+  // Current-week picker chips (only when weeks exist)
+  if (COURSE.weeks.length > 0) {
+    const top = document.createElement('div');
+    top.style.cssText =
+      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'font-size:13px;font-weight:500;color:var(--text-secondary)';
+    lbl.textContent = 'Current week';
+    top.appendChild(lbl);
+    const picks = document.createElement('div');
+    picks.style.cssText = 'display:flex;gap:4px';
+    COURSE.weeks.forEach(w => {
+      const p = document.createElement('span');
+      p.textContent = String(w.week);
+      const on = COURSE.currentWeek === w.week;
+      p.style.cssText =
+        'width:23px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--font-mono);' +
+        (on
+          ? 'background:var(--accent);color:#fff'
+          : 'background:var(--bg-panel);color:var(--text-tertiary);border:1px solid var(--border-subtle)');
+      p.addEventListener('click', () => {
+        COURSE.currentWeek = w.week;
+        repaint();
+      });
+      picks.appendChild(p);
     });
-    picks.appendChild(p);
-  });
-  top.appendChild(picks);
-  const theme = document.createElement('span');
-  theme.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
-  theme.textContent =
-    COURSE.weeks.find(w => w.week === COURSE.currentWeek)?.theme ?? '';
-  top.appendChild(theme);
-  host.appendChild(top);
+    top.appendChild(picks);
+    const theme = document.createElement('span');
+    theme.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
+    theme.textContent =
+      COURSE.weeks.find(w => w.week === COURSE.currentWeek)?.theme ?? '';
+    top.appendChild(theme);
+    host.appendChild(top);
+  } else {
+    const hint = document.createElement('div');
+    hint.style.cssText =
+      'padding:16px 4px;font-size:13px;color:var(--text-tertiary)';
+    hint.textContent =
+      'No weeks yet. Add a week, then upload notebooks and slides to it.';
+    host.appendChild(hint);
+  }
 
-  COURSE.weeks.forEach(w => host.appendChild(weekAdmin(w, repaint)));
+  COURSE.weeks.forEach(w => host.appendChild(weekAdmin(w, app, repaint)));
 
   const addBtn = button('+ Add week', 'secondary');
   addBtn.style.alignSelf = 'flex-start';
   addBtn.addEventListener('click', () => {
-    const n = COURSE.weeks.length + 1;
     const w: ICourseWeek = {
-      week: n,
+      week: COURSE.weeks.length + 1,
       theme: 'New week',
       topics: ['To be planned'],
       slides: { pdf: '', label: 'No slides yet' },
       notebookIds: []
     };
     COURSE.weeks.push(w);
+    renumberWeeks(COURSE);
+    tEditWeek.add(w.week); // open the new week for editing right away
     repaint();
   });
   host.appendChild(addBtn);
 }
 
-function weekAdmin(w: ICourseWeek, repaint: () => void): HTMLElement {
+/** True when a week has slides attached (uploaded locally or online). */
+function slidesReady(w: ICourseWeek): boolean {
+  return !!w.slides.pdf || /online|uploaded/i.test(w.slides.label);
+}
+
+/** Upload-styled label button with a hidden file input. */
+function uploadButton(
+  labelHtml: string,
+  accept: string,
+  onFile: (file: File) => void
+): HTMLElement {
+  const label = document.createElement('label');
+  label.style.cssText =
+    'display:inline-flex;align-items:center;gap:6px;height:var(--control-sm);box-sizing:border-box;font-size:12px;font-weight:500;color:var(--text-secondary);cursor:pointer;white-space:nowrap;border:1px solid var(--border-default);border-radius:6px;padding:0 12px;transition:border-color var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out)';
+  label.innerHTML = labelHtml;
+  label.addEventListener('mouseenter', () => {
+    label.style.color = 'var(--text-primary)';
+    label.style.borderColor = 'var(--border-strong)';
+  });
+  label.addEventListener('mouseleave', () => {
+    label.style.color = 'var(--text-secondary)';
+    label.style.borderColor = 'var(--border-default)';
+  });
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = accept;
+  input.style.display = 'none';
+  input.addEventListener('change', () => {
+    const f = input.files?.[0];
+    if (f) onFile(f);
+    input.value = '';
+  });
+  label.appendChild(input);
+  return label;
+}
+
+function weekAdmin(
+  w: ICourseWeek,
+  app: NotebookMindApp,
+  repaint: () => void
+): HTMLElement {
   const COURSE = activeData();
   const box = document.createElement('div');
   box.style.cssText =
     'background:var(--bg-panel);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
 
-  // Header: title · Current badge · unlocked count · Materials · slides button
+  // ── Header: title · current badge · spacer · Edit · Delete ──
   const head = document.createElement('div');
   head.style.cssText =
     'display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border-subtle);flex-wrap:wrap';
@@ -476,152 +599,241 @@ function weekAdmin(w: ICourseWeek, repaint: () => void): HTMLElement {
   t.textContent = `Week ${w.week} — ${w.theme}`;
   head.appendChild(t);
   if (w.week === COURSE.currentWeek) head.appendChild(tag('Current', 'accent', true));
-  const nbs = w.notebookIds.map(id => COURSE.notebooks[id]).filter(Boolean);
-  const unlocked = nbs.filter(n => n.status !== 'locked').length;
-  const count = document.createElement('span');
-  count.style.cssText =
-    'font-size:11px;color:var(--text-quaternary);font-family:var(--font-mono);white-space:nowrap';
-  count.textContent = `${unlocked} of ${nbs.length} unlocked`;
-  head.appendChild(count);
   const spacer = document.createElement('span');
   spacer.style.cssText = 'flex:1;min-width:12px';
   head.appendChild(spacer);
 
-  const actions = document.createElement('div');
-  actions.style.cssText =
-    'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
-
-  const slidesUploaded = !!w.slides.pdf || w.slides.label.includes('online');
-  if (slidesUploaded) {
-    const ok = document.createElement('span');
-    ok.style.cssText =
-      'display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--green-400);white-space:nowrap';
-    ok.innerHTML =
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>Slides uploaded';
-    actions.appendChild(ok);
-  }
-
-  // Materials: label-styled multi-upload → name chips
-  const matLabel = document.createElement('label');
-  matLabel.style.cssText =
-    'display:inline-flex;align-items:center;gap:6px;height:32px;box-sizing:border-box;font-size:12px;font-weight:500;color:var(--text-secondary);cursor:pointer;white-space:nowrap;border:1px solid var(--border-default);border-radius:6px;padding:0 12px;transition:border-color var(--dur-fast) var(--ease-out)';
-  matLabel.innerHTML =
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Materials';
-  matLabel.addEventListener('mouseenter', () => {
-    matLabel.style.color = 'var(--text-primary)';
-    matLabel.style.borderColor = 'var(--border-strong)';
-  });
-  matLabel.addEventListener('mouseleave', () => {
-    matLabel.style.color = 'var(--text-secondary)';
-    matLabel.style.borderColor = 'var(--border-default)';
-  });
-  const matInput = document.createElement('input');
-  matInput.type = 'file';
-  matInput.multiple = true;
-  matInput.style.display = 'none';
-  matInput.addEventListener('change', () => {
-    const names = Array.from(matInput.files ?? []).map(f => f.name);
-    if (!names.length) return;
-    tFiles.set(w.week, [...(tFiles.get(w.week) ?? []), ...names]);
-    matInput.value = '';
+  const editBtn = button(tEditWeek.has(w.week) ? 'Close' : 'Edit', 'ghost');
+  editBtn.style.height = 'var(--control-sm)';
+  editBtn.style.fontSize = '12px';
+  editBtn.addEventListener('click', () => {
+    if (tEditWeek.has(w.week)) tEditWeek.delete(w.week);
+    else tEditWeek.add(w.week);
     repaint();
   });
-  matLabel.appendChild(matInput);
-  actions.appendChild(matLabel);
+  head.appendChild(editBtn);
 
-  // Slides upload (functional: PDF → Supabase when connected)
-  const slideStatus = document.createElement('span');
-  slideStatus.style.cssText =
-    'font-size:11.5px;color:var(--text-quaternary);white-space:nowrap';
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.pdf';
-  fileInput.style.display = 'none';
-  const uploadBtn = button(slidesUploaded ? 'Replace slides' : 'Upload slides', 'secondary');
-  uploadBtn.addEventListener('click', () => {
-    if (!isConnected()) {
-      slideStatus.textContent = 'Connect Supabase to upload slides.';
-      slideStatus.style.color = 'var(--yellow-500)';
+  let delArmed = false;
+  const delBtn = button('Delete week', 'ghost');
+  delBtn.style.height = 'var(--control-sm)';
+  delBtn.style.fontSize = '12px';
+  delBtn.style.color = 'var(--red-400)';
+  delBtn.addEventListener('click', () => {
+    if (!delArmed) {
+      delArmed = true;
+      delBtn.textContent = 'Confirm delete';
+      delBtn.style.background = 'var(--red-bg)';
       return;
     }
-    fileInput.click();
+    const idx = COURSE.weeks.findIndex(x => x.week === w.week);
+    if (idx >= 0) COURSE.weeks.splice(idx, 1);
+    tEditWeek.delete(w.week);
+    renumberWeeks(COURSE);
+    repaint();
   });
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    uploadBtn.style.pointerEvents = 'none';
-    slideStatus.textContent = 'Extracting PDF…';
-    slideStatus.style.color = 'var(--text-quaternary)';
-    try {
-      const result = await extractPdfFull(file);
-      slideStatus.textContent = `Uploading ${result.pages.length} pages…`;
-      await upsertCourseWeekSlides({
-        courseId: DEMO_COURSE_ID,
-        weekNumber: w.week,
-        weekTheme: w.theme,
-        topics: w.topics,
-        title: `Week ${w.week} — ${file.name.replace(/\.pdf$/i, '')}`,
-        sourceText: result.fullText,
-        parts: result.pages.map((p, i) => ({
-          index: i,
-          title: `Page ${p.pageNumber}`,
-          text: p.text,
-          imageBase64: p.imageBase64,
-          width: p.width,
-          height: p.height
-        }))
-      });
-      w.slides.label = `Week ${w.week} slides (online)`;
-      repaint();
-    } catch (err) {
-      slideStatus.textContent = `Error: ${(err as Error).message}`;
-      slideStatus.style.color = 'var(--red-400)';
-    } finally {
-      uploadBtn.style.pointerEvents = '';
-      fileInput.value = '';
-    }
-  });
-  actions.appendChild(uploadBtn);
-  actions.appendChild(fileInput);
-  actions.appendChild(slideStatus);
-  head.appendChild(actions);
+  head.appendChild(delBtn);
   box.appendChild(head);
 
-  // Materials chips
-  const files = tFiles.get(w.week) ?? [];
-  if (files.length > 0) {
-    const chips = document.createElement('div');
-    chips.style.cssText =
-      'display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 4px';
-    files.forEach(fn => {
-      const chip = document.createElement('span');
-      chip.style.cssText =
-        'display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-secondary);background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:999px;padding:3px 10px';
-      chip.innerHTML =
-        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
-        fn;
-      chips.appendChild(chip);
-    });
-    box.appendChild(chips);
+  // Edit panel: theme + topics
+  if (tEditWeek.has(w.week)) {
+    box.appendChild(weekEditPanel(w, repaint));
   }
 
+  const nbs = w.notebookIds.map(id => COURSE.notebooks[id]).filter(Boolean);
+  const unlocked = nbs.filter(n => n.status !== 'locked').length;
+
+  // ── Status + add row: slide status · notebook count · +Notebook · +Slides ──
+  const bar = document.createElement('div');
+  bar.style.cssText =
+    'display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border-subtle)';
+
+  const slideChip = document.createElement('span');
+  const ready = slidesReady(w);
+  slideChip.style.cssText =
+    'display:inline-flex;align-items:center;gap:5px;font-size:11.5px;white-space:nowrap;color:' +
+    (ready ? 'var(--green-400)' : 'var(--text-quaternary)');
+  slideChip.innerHTML = ready
+    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>Slides: ' +
+      w.slides.label.replace(/\s*\((online|uploaded)\)/i, '')
+    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 16v5"></path></svg>No slides yet';
+  bar.appendChild(slideChip);
+
+  const dot = document.createElement('span');
+  dot.style.cssText = 'color:var(--text-quaternary)';
+  dot.textContent = '·';
+  bar.appendChild(dot);
+
+  const nbCount = document.createElement('span');
+  nbCount.style.cssText =
+    'font-size:11.5px;color:var(--text-quaternary);font-family:var(--font-mono);white-space:nowrap';
+  nbCount.textContent = `${nbs.length} notebook${nbs.length === 1 ? '' : 's'} · ${unlocked} unlocked`;
+  bar.appendChild(nbCount);
+
+  const barSpacer = document.createElement('span');
+  barSpacer.style.cssText = 'flex:1;min-width:8px';
+  bar.appendChild(barSpacer);
+
+  // + Notebook (upload .ipynb)
+  const nbUpload = uploadButton(
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>Notebook',
+    '.ipynb',
+    async file => {
+      try {
+        const doc = await parseUploadedNotebook(file);
+        const id = `up-${Date.now()}`;
+        COURSE.notebooks[id] = {
+          id,
+          title: file.name.replace(/\.ipynb$/i, ''),
+          topic: 'Uploaded',
+          blurb: `${doc.cells.length} cells`,
+          week: w.week,
+          status: 'available',
+          path: undefined,
+          deps: []
+        };
+        uploadedDocs.set(id, doc);
+        w.notebookIds.push(id);
+        // Analyse the notebook: for every code cell, generate a starter task
+        // (rotating the type) so questions are ready to review/customise.
+        const rotation: IAuthoredChallenge['type'][] = ['predict-mc', 'bugfix', 'fillblank'];
+        doc.cells.forEach((src, i) => {
+          setAuthoredChallenge(id, i, dummyAuthored(src, rotation[i % rotation.length]));
+        });
+        tExpand.set(id, true); // open its task editor straight away
+        repaint();
+        celebrate(`Analysed ${doc.cells.length} cells · tasks generated`);
+      } catch {
+        alert('That file could not be parsed as a notebook.');
+      }
+    }
+  );
+  bar.appendChild(nbUpload);
+
+  // + Slides (upload PDF)
+  const slideStatus = document.createElement('span');
+  slideStatus.style.cssText =
+    'font-size:11px;color:var(--text-quaternary);white-space:nowrap';
+  const slideUpload = uploadButton(
+    (ready
+      ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Replace slides'
+      : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Slides'),
+    '.pdf',
+    async file => {
+      // If Supabase is connected, extract + upload; otherwise mark locally.
+      if (!isConnected()) {
+        w.slides = { pdf: 'local', label: `${file.name} (uploaded)` };
+        repaint();
+        return;
+      }
+      slideStatus.textContent = 'Extracting…';
+      try {
+        const result = await extractPdfFull(file);
+        await upsertCourseWeekSlides({
+          courseId: DEMO_COURSE_ID,
+          weekNumber: w.week,
+          weekTheme: w.theme,
+          topics: w.topics,
+          title: `Week ${w.week} — ${file.name.replace(/\.pdf$/i, '')}`,
+          sourceText: result.fullText,
+          parts: result.pages.map((p, i) => ({
+            index: i,
+            title: `Page ${p.pageNumber}`,
+            text: p.text,
+            imageBase64: p.imageBase64,
+            width: p.width,
+            height: p.height
+          }))
+        });
+        w.slides = { pdf: 'online', label: `${file.name} (online)` };
+        repaint();
+      } catch (err) {
+        slideStatus.textContent = `Error: ${(err as Error).message}`;
+        slideStatus.style.color = 'var(--red-400)';
+      }
+    }
+  );
+  bar.appendChild(slideUpload);
+  bar.appendChild(slideStatus);
+  box.appendChild(bar);
+
+  // ── Notebook rows ──
   if (nbs.length === 0) {
     const empty = document.createElement('div');
     empty.style.cssText =
       'padding:12px 16px;font-size:12px;color:var(--text-quaternary)';
-    empty.textContent = 'No notebooks yet — add them in the Tasks tab.';
+    empty.textContent = 'No notebooks yet — upload one with “+ Notebook”.';
     box.appendChild(empty);
   }
-
-  nbs.forEach(nb => box.appendChild(nbAdminRow(nb, repaint)));
+  nbs.forEach(nb => box.appendChild(nbAdminRow(nb, w, app, repaint)));
   return box;
 }
 
-/** One notebook row: status · title · sched pill · state · Lock/Unlock · expand. */
+/** Inline editor for a week's theme + topics. */
+function weekEditPanel(w: ICourseWeek, repaint: () => void): HTMLElement {
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-subtle);background:var(--bg-base)';
+
+  const themeInput = textInput(w.theme);
+  const topicsInput = textInput(w.topics.join(', '));
+
+  panel.appendChild(field('Week title', themeInput));
+  const topicsWrap = field('Topics (comma-separated)', topicsInput);
+  topicsWrap.style.marginBottom = '0';
+  panel.appendChild(topicsWrap);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center';
+  const save = button('Save week', 'accent');
+  save.style.height = 'var(--control-sm)';
+  const cancel = button('Cancel', 'ghost');
+  cancel.style.height = 'var(--control-sm)';
+  save.addEventListener('click', () => {
+    w.theme = themeInput.value.trim() || w.theme;
+    w.topics = topicsInput.value
+      .split(',')
+      .map(t => t.trim())
+      .filter(Boolean);
+    if (w.topics.length === 0) {
+      w.topics = ['To be planned'];
+    }
+    tEditWeek.delete(w.week);
+    repaint();
+  });
+  cancel.addEventListener('click', () => {
+    tEditWeek.delete(w.week);
+    repaint();
+  });
+  row.appendChild(save);
+  row.appendChild(cancel);
+  panel.appendChild(row);
+  return panel;
+}
+
+/** Load a notebook's cells — from an uploaded doc or the workspace path. */
+async function loadCells(
+  app: NotebookMindApp,
+  nb: ReturnType<typeof activeData>['notebooks'][string]
+): Promise<{ key: string; cells: string[] } | null> {
+  const up = uploadedDocs.get(nb.id);
+  if (up) {
+    return { key: nb.id, cells: up.cells };
+  }
+  if (nb.path) {
+    const doc = await loadNotebook(app.services.contents, nb.path, nb.title);
+    return { key: basename(nb.path), cells: doc.cells };
+  }
+  return null;
+}
+
+/** One notebook row: status · title · state · Lock/Unlock · Tasks ▾ · Delete. */
 function nbAdminRow(
   nb: ReturnType<typeof activeData>['notebooks'][string],
+  w: ICourseWeek,
+  app: NotebookMindApp,
   repaint: () => void
 ): HTMLElement {
+  const COURSE = activeData();
   const locked = nb.status === 'locked';
   const sched = tSchedules.get(nb.id) ?? '';
   const wrap = document.createElement('div');
@@ -630,13 +842,7 @@ function nbAdminRow(
 
   const row = document.createElement('div');
   row.style.cssText =
-    'display:flex;align-items:center;gap:12px;padding:9px 16px;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out)';
-  row.addEventListener('mouseenter', () => {
-    row.style.background = 'rgba(0,0,0,0.025)';
-  });
-  row.addEventListener('mouseleave', () => {
-    row.style.background = 'transparent';
-  });
+    'display:flex;align-items:center;gap:12px;padding:9px 16px;transition:background-color var(--dur-fast) var(--ease-out)';
   row.appendChild(
     statusIcon(nb.status === 'done' ? 'done' : locked ? 'backlog' : 'started', 14)
   );
@@ -646,64 +852,80 @@ function nbAdminRow(
   title.textContent = nb.title;
   row.appendChild(title);
 
-  if (sched) {
-    const pill = document.createElement('span');
-    pill.style.cssText =
-      'font-size:11px;font-weight:500;color:var(--accent-text);background:var(--accent-subtle-bg);border-radius:999px;padding:2px 9px;white-space:nowrap';
-    pill.textContent = `Releases ${new Date(sched).toLocaleString('en-US', {
+  const stateLbl = document.createElement('span');
+  stateLbl.style.cssText =
+    'font-size:11.5px;font-weight:500;white-space:nowrap;color:' +
+    (locked ? (sched ? 'var(--accent-text)' : 'var(--text-quaternary)') : 'var(--green-400)');
+  if (locked && sched) {
+    stateLbl.textContent = `Releases ${new Date(sched).toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     })}`;
-    row.appendChild(pill);
+  } else {
+    stateLbl.textContent = locked ? 'Locked' : 'Unlocked';
   }
-
-  const stateLbl = document.createElement('span');
-  stateLbl.style.cssText =
-    'font-size:11.5px;font-weight:500;white-space:nowrap;color:' +
-    (locked
-      ? sched
-        ? 'var(--accent-text)'
-        : 'var(--text-quaternary)'
-      : 'var(--green-400)');
-  stateLbl.textContent = locked ? (sched ? 'Scheduled' : 'Locked') : 'Unlocked';
   row.appendChild(stateLbl);
 
-  const toggleBtn = button(locked ? 'Unlock now' : 'Lock', 'secondary');
+  const toggleBtn = button(locked ? 'Unlock' : 'Lock', 'secondary');
   toggleBtn.style.height = 'var(--control-sm)';
   toggleBtn.style.fontSize = '12px';
-  toggleBtn.addEventListener('click', e => {
-    e.stopPropagation();
+  toggleBtn.addEventListener('click', () => {
     nb.status = locked ? 'available' : 'locked';
-    if (!locked) tSchedules.delete(nb.id);
-    else tSchedules.delete(nb.id);
+    tSchedules.delete(nb.id);
     repaint();
   });
   row.appendChild(toggleBtn);
 
-  const chev = document.createElement('span');
-  chev.style.cssText =
-    'font-size:10px;color:var(--text-quaternary);width:12px;text-align:center';
-  chev.textContent = tExpand.get(nb.id) ? '▴' : '▾';
-  row.appendChild(chev);
-
-  row.addEventListener('click', () => {
+  const tasksBtn = button(
+    (tExpand.get(nb.id) ? 'Hide tasks ▴' : 'Tasks & timing ▾'),
+    'ghost'
+  );
+  tasksBtn.style.height = 'var(--control-sm)';
+  tasksBtn.style.fontSize = '12px';
+  tasksBtn.addEventListener('click', () => {
     tExpand.set(nb.id, !tExpand.get(nb.id));
     repaint();
   });
+  row.appendChild(tasksBtn);
+
+  let delArmed = false;
+  const delBtn = button('Delete', 'ghost');
+  delBtn.style.height = 'var(--control-sm)';
+  delBtn.style.fontSize = '12px';
+  delBtn.style.color = 'var(--red-400)';
+  delBtn.addEventListener('click', () => {
+    if (!delArmed) {
+      delArmed = true;
+      delBtn.textContent = 'Confirm';
+      delBtn.style.background = 'var(--red-bg)';
+      return;
+    }
+    w.notebookIds = w.notebookIds.filter(id => id !== nb.id);
+    delete COURSE.notebooks[nb.id];
+    uploadedDocs.delete(nb.id);
+    tSchedules.delete(nb.id);
+    tExpand.delete(nb.id);
+    repaint();
+  });
+  row.appendChild(delBtn);
   wrap.appendChild(row);
 
-  // Expanded: timed release
+  // ── Expanded: timed release + generated tasks ──
   if (tExpand.get(nb.id)) {
     const panel = document.createElement('div');
     panel.style.cssText =
-      'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 16px 14px 42px';
+      'display:flex;flex-direction:column;gap:12px;padding:4px 16px 16px 42px;background:var(--bg-base)';
+
+    // Timed release
+    const relRow = document.createElement('div');
+    relRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
     const capsLbl = document.createElement('span');
     capsLbl.style.cssText =
       'font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary)';
     capsLbl.textContent = 'Timed release';
-    panel.appendChild(capsLbl);
+    relRow.appendChild(capsLbl);
     const dt = document.createElement('input');
     dt.type = 'datetime-local';
     dt.value = sched;
@@ -718,7 +940,7 @@ function nbAdminRow(
       }
       repaint();
     });
-    panel.appendChild(dt);
+    relRow.appendChild(dt);
     if (sched) {
       const clear = document.createElement('span');
       clear.style.cssText =
@@ -730,86 +952,58 @@ function nbAdminRow(
         tSchedules.delete(nb.id);
         repaint();
       });
-      panel.appendChild(clear);
+      relRow.appendChild(clear);
     }
-    const hint = document.createElement('span');
-    hint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
-    hint.textContent =
-      'Locks the notebook until the chosen time, then releases it automatically.';
-    panel.appendChild(hint);
-    wrap.appendChild(panel);
-  }
+    const relHint = document.createElement('span');
+    relHint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+    relHint.textContent = 'Locks until the chosen time, then releases automatically.';
+    relRow.appendChild(relHint);
+    panel.appendChild(relRow);
 
-  return wrap;
-}
+    const sepEl = document.createElement('div');
+    sepEl.style.cssText = 'height:1px;background:var(--border-subtle)';
+    panel.appendChild(sepEl);
 
-// ── Tasks authoring ───────────────────────────────────────────────
-function renderTasks(host: HTMLElement, app: NotebookMindApp): void {
-  const COURSE = activeData();
-  host.style.cssText = 'display:flex;flex-direction:column;gap:10px';
-  const openable = Object.values(COURSE.notebooks).filter(n => n.path);
+    // Generated tasks (per cell)
+    const tasksHead = document.createElement('div');
+    tasksHead.style.cssText = 'display:flex;align-items:center;gap:8px';
+    tasksHead.innerHTML =
+      '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">Practice tasks</span>' +
+      '<span style="font-size:11.5px;color:var(--text-tertiary)">One per cell — change the type, edit the description and solution.</span>';
+    panel.appendChild(tasksHead);
 
-  // Notebook picker row (prototype)
-  const picker = document.createElement('div');
-  picker.style.cssText =
-    'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
-  const pickLbl = document.createElement('span');
-  pickLbl.style.cssText =
-    'font-size:13px;font-weight:500;color:var(--text-secondary)';
-  pickLbl.textContent = 'Notebook';
-  picker.appendChild(pickLbl);
-  const sel = document.createElement('select');
-  sel.style.cssText =
-    'height:38px;box-sizing:border-box;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:0 32px 0 12px;font-size:13px;font-family:var(--font-sans);line-height:1.2;outline:none';
-  openable.forEach(n => {
-    const o = document.createElement('option');
-    o.value = n.path as string;
-    o.textContent = `Week ${n.week} · ${n.title}`;
-    sel.appendChild(o);
-  });
-  picker.appendChild(sel);
-  const editing = document.createElement('span');
-  editing.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
-  picker.appendChild(editing);
-  host.appendChild(picker);
-
-  const listHost = document.createElement('div');
-  listHost.style.cssText = 'display:flex;flex-direction:column;gap:10px';
-  host.appendChild(listHost);
-
-  function load(path: string, title: string): void {
-    editing.textContent = `Author or AI-generate the challenge students practice on each cell — editing ${basename(path)}.`;
-    listHost.innerHTML = '';
+    const listHost = document.createElement('div');
+    listHost.style.cssText = 'display:flex;flex-direction:column;gap:10px';
     listHost.appendChild(spinner('Loading notebook cells…'));
-    void loadNotebook(app.services.contents, path, title)
-      .then(doc => {
+    panel.appendChild(listHost);
+
+    void loadCells(app, nb)
+      .then(res => {
         listHost.innerHTML = '';
-        const key = basename(path);
-        doc.cells.forEach((src, i) =>
-          listHost.appendChild(cellAuthor(key, i, src))
+        if (!res) {
+          listHost.appendChild(
+            infoBox(
+              'This notebook has no editable source. Upload an .ipynb to author tasks per cell.',
+              'info'
+            )
+          );
+          return;
+        }
+        res.cells.forEach((src, i) =>
+          listHost.appendChild(cellAuthor(res.key, i, src))
         );
       })
       .catch(() => {
         listHost.innerHTML = '';
         listHost.appendChild(
-          infoBox(`Could not load ${basename(path)} from the workspace.`, 'error')
+          infoBox(`Could not load ${nb.title} from the workspace.`, 'error')
         );
       });
+
+    wrap.appendChild(panel);
   }
 
-  sel.addEventListener('change', () => {
-    const nb = openable.find(n => n.path === sel.value);
-    if (nb) {
-      load(nb.path as string, nb.title);
-    }
-  });
-
-  if (openable.length > 0) {
-    const first = openable[0];
-    load(first.path as string, first.title);
-  } else {
-    listHost.appendChild(infoBox('No openable notebooks in this course.', 'info'));
-  }
+  return wrap;
 }
 
 function cellAuthor(key: string, i: number, source: string): HTMLElement {
@@ -828,7 +1022,8 @@ function cellAuthor(key: string, i: number, source: string): HTMLElement {
     'font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)';
   tl.textContent = cellTitle(key, source, i);
   const toggle = button('Author', 'ghost');
-  toggle.style.height = 'var(--control-md)';
+  toggle.style.height = 'var(--control-sm)';
+  toggle.style.fontSize = '12px';
   t.appendChild(num);
   t.appendChild(tl);
   t.appendChild(toggle);
@@ -856,38 +1051,88 @@ function cellAuthor(key: string, i: number, source: string): HTMLElement {
   return c;
 }
 
+/** Built-in (no-AI) task generator so authoring works without an API key. */
+function dummyAuthored(
+  source: string,
+  type: IAuthoredChallenge['type']
+): IAuthoredChallenge {
+  if (type === 'bugfix') {
+    return {
+      type,
+      difficulty: 'medium',
+      summary: 'This cell performs the computation shown in the code.',
+      instructions:
+        'Find and fix the one bug in the code below, then run the cell so it produces the correct output.',
+      hints: ['Read each line carefully.', 'Check operators, signs and function names.'],
+      presentedCode: source
+    };
+  }
+  if (type === 'fillblank') {
+    return {
+      type,
+      difficulty: 'medium',
+      summary: 'This cell produces a specific result.',
+      instructions:
+        'Write the code for this cell from scratch so it runs and produces the expected output.',
+      hints: ['Recreate the logic shown in the reference.', 'Check variable names and output format.']
+    };
+  }
+  return {
+    type: 'predict-mc',
+    difficulty: 'easy',
+    summary: 'This cell runs the code shown.',
+    instructions: 'Read the code and pick the best description of what it does.',
+    hints: [],
+    options: [
+      'It executes the code shown in the cell.',
+      'It only defines variables without running anything.',
+      'It imports libraries but does nothing else.',
+      'It produces an error and stops.'
+    ],
+    answer: 'It executes the code shown in the cell.'
+  };
+}
+
 function buildForm(key: string, i: number, source: string): HTMLElement {
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'border-top:1px solid var(--nm-border-subtle);padding-top:12px';
+  wrap.style.cssText = 'border-top:1px solid var(--border-subtle);padding-top:12px';
 
-  let type: IAuthoredChallenge['type'] = 'predict-mc';
+  // Prefill from the notebook's existing (generated / seeded) task, if any.
+  const seed = demoChallenge(key, i, source);
+  let type: IAuthoredChallenge['type'] =
+    (seed?.type as IAuthoredChallenge['type']) ?? 'predict-mc';
   const typeRow = document.createElement('div');
   typeRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap';
   const dynamic = document.createElement('div');
 
-  const summary = textInput('What this cell does (short).');
-  const instructions = textInput('What the learner must do.');
-  const hint1 = textInput('A gentle hint.');
-  const hint2 = textInput('A more direct hint.');
+  const summary = textInput(seed?.summary ?? '');
+  const instructions = textInput(seed?.instructions ?? '');
+  const hint1 = textInput(seed?.hints?.[0] ?? '');
+  const hint2 = textInput(seed?.hints?.[1] ?? '');
+  summary.placeholder = 'What this cell does (short).';
+  instructions.placeholder = 'What the learner must do.';
+  hint1.placeholder = 'A gentle hint.';
+  hint2.placeholder = 'A more direct hint.';
 
   function buildDynamic(): void {
     dynamic.innerHTML = '';
     if (type === 'predict-mc') {
+      const seedOpts = type === seed?.type ? seed?.options ?? [] : [];
+      const seedAns = type === seed?.type ? seed?.answer : undefined;
       const opts: HTMLInputElement[] = [];
-      let correct = 0;
+      let correct = Math.max(0, seedOpts.indexOf(seedAns ?? ''));
       for (let k = 0; k < 4; k++) {
         const rowEl = document.createElement('div');
         rowEl.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
         const radio = document.createElement('input');
         radio.type = 'radio';
-        radio.name = `correct-${i}`;
-        if (k === 0) {
-          radio.checked = true;
-        }
+        radio.name = `correct-${key}-${i}`;
+        radio.checked = k === correct;
         radio.addEventListener('change', () => {
           correct = k;
         });
-        const inp = textInput(k === 0 ? 'Correct answer' : `Distractor ${k}`);
+        const inp = textInput(seedOpts[k] ?? '');
+        inp.placeholder = k === 0 ? 'Correct answer' : `Distractor ${k}`;
         opts.push(inp);
         rowEl.appendChild(radio);
         rowEl.appendChild(inp);
@@ -899,17 +1144,20 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
         answer: opts[correct].value
       });
     } else if (type === 'bugfix') {
-      const code = textArea(source, 7);
-      code.style.fontFamily = 'var(--nm-font-mono)';
+      const code = textArea(
+        type === seed?.type ? seed?.presentedCode ?? source : source,
+        7
+      );
+      code.style.fontFamily = 'var(--font-mono)';
       dynamic.appendChild(field('Buggy code (introduce one bug)', code));
       (dynamic as any)._read = (): Partial<IAuthoredChallenge> => ({
         presentedCode: code.value
       });
     } else {
       const note = document.createElement('div');
-      note.style.cssText = 'font-size:12.5px;color:var(--nm-fg-muted)';
+      note.style.cssText = 'font-size:12.5px;color:var(--text-tertiary);line-height:1.5';
       note.textContent =
-        'Fill-in shows an empty editor; the learner writes the cell, checked against its real output.';
+        'Free text shows an empty editor; the learner writes the cell, checked against its real output.';
       dynamic.appendChild(note);
       (dynamic as any)._read = (): Partial<IAuthoredChallenge> => ({});
     }
@@ -923,16 +1171,16 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
           ? 'Multiple choice'
           : tk === 'bugfix'
           ? 'Find the bug'
-          : 'Fill in the cell';
+          : 'Free text';
       b.textContent = label;
       const paint = (): void => {
         const on = type === tk;
         b.style.cssText = [
-          'padding:6px 12px;border-radius:var(--nm-radius);font-size:12px;font-weight:600;cursor:pointer',
-          'font-family:var(--nm-font-sans);border:1px solid',
+          'padding:5px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer',
+          'font-family:var(--font-sans);border:1px solid;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)',
           on
-            ? 'background:var(--nm-accent);color:#fff;border-color:var(--nm-accent)'
-            : 'background:#fff;color:var(--nm-fg-muted);border-color:var(--nm-border)'
+            ? 'background:var(--accent-subtle-bg);color:var(--accent-text);border-color:transparent'
+            : 'background:var(--bg-panel);color:var(--text-tertiary);border-color:var(--border-default)'
         ].join(';');
       };
       paint();
@@ -959,24 +1207,24 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
 
   const diffSel = document.createElement('select');
   diffSel.style.cssText =
-    'font-family:var(--nm-font-sans);font-size:13px;padding:8px 10px;border:1px solid var(--nm-border);border-radius:var(--nm-radius);background:#fff;color:var(--nm-fg)';
+    'font-family:var(--font-sans);font-size:13px;height:var(--control-md);box-sizing:border-box;padding:0 10px;border:1px solid var(--border-default);border-radius:var(--radius-control);background:var(--surface-input);color:var(--text-primary);outline:none';
   (['easy', 'medium', 'hard', 'impossible'] as Difficulty[]).forEach(d => {
     const o = document.createElement('option');
     o.value = d;
     o.textContent = d;
-    if (d === 'medium') {
+    if (d === (seed?.difficulty ?? 'medium')) {
       o.selected = true;
     }
     diffSel.appendChild(o);
   });
 
   const status = document.createElement('div');
-  status.style.cssText = 'font-size:12px;color:var(--nm-success-text);margin-top:8px;min-height:16px';
+  status.style.cssText = 'font-size:12px;color:var(--green-400);margin-top:8px;min-height:16px';
 
   const actions = document.createElement('div');
   actions.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap';
   const saveBtn = button('Save task', 'accent');
-  const aiBtn = button('✨ AI generate', 'secondary');
+  const aiBtn = button(isAiReady() ? '✨ Generate' : '✨ Generate demo', 'secondary');
 
   function compose(): IAuthoredChallenge {
     const extra = (dynamic as any)._read
@@ -998,36 +1246,45 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
   });
 
   aiBtn.addEventListener('click', async () => {
+    const origLabel = aiBtn.textContent;
     aiBtn.textContent = '✨ Generating…';
     aiBtn.disabled = true;
     status.textContent = '';
     try {
-      const ch = await generateChallenge(source, type);
-      summary.value = ch.summary ?? summary.value;
-      instructions.value = ch.instructions ?? instructions.value;
-      if (ch.hints[0]) {
-        hint1.value = ch.hints[0];
+      let ch: IAuthoredChallenge;
+      if (isAiReady()) {
+        const g = await generateChallenge(source, type);
+        ch = {
+          type: g.type === 'predict-free' ? 'predict-mc' : g.type,
+          difficulty: g.difficulty,
+          summary: g.summary ?? '',
+          instructions: g.instructions ?? '',
+          hints: g.hints,
+          presentedCode: g.presentedCode,
+          options: g.options,
+          answer: g.answer
+        };
+      } else {
+        ch = dummyAuthored(source, type);
       }
-      if (ch.hints[1]) {
-        hint2.value = ch.hints[1];
-      }
+      type = ch.type;
+      summary.value = ch.summary;
+      instructions.value = ch.instructions;
+      hint1.value = ch.hints[0] ?? '';
+      hint2.value = ch.hints[1] ?? '';
       diffSel.value = ch.difficulty;
-      setAuthoredChallenge(key, i, {
-        type: ch.type === 'predict-free' ? 'predict-mc' : ch.type,
-        difficulty: ch.difficulty,
-        summary: ch.summary ?? '',
-        instructions: ch.instructions ?? '',
-        hints: ch.hints,
-        presentedCode: ch.presentedCode,
-        options: ch.options,
-        answer: ch.answer
-      });
-      status.textContent = '✓ AI task generated and saved.';
+      setAuthoredChallenge(key, i, ch);
+      status.textContent = isAiReady()
+        ? '✓ Task generated and saved.'
+        : '✓ Demo task generated and saved.';
     } catch {
-      status.textContent = '';
-      wrap.appendChild(infoBox('AI generation failed.', 'error'));
+      const ch = dummyAuthored(source, type);
+      summary.value = ch.summary;
+      instructions.value = ch.instructions;
+      setAuthoredChallenge(key, i, ch);
+      status.textContent = '✓ Demo task generated and saved.';
     } finally {
-      aiBtn.textContent = '✨ AI generate';
+      aiBtn.textContent = origLabel;
       aiBtn.disabled = false;
     }
   });

@@ -9,12 +9,12 @@ import { getSupaWeekSlides } from './supabaseDB';
 import { pointsEngine } from './points';
 import {
   activeCourse,
-  allCourses,
-  setActiveCourse,
+  hasCourses,
   joinByCode,
   createCourse,
   coursePercentOf
 } from './courseStore';
+import { profile } from './friendsData';
 import {
   button,
   maxWidth,
@@ -38,13 +38,25 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   root.style.cssText +=
     ';display:flex;flex-direction:column;gap:20px;padding-bottom:32px';
 
-  // ── Page header + course switcher ─────────────────────────────
+  // ── No courses at all (never joined, or left them all) ────────
+  if (!hasCourses()) {
+    root.appendChild(noCoursesState());
+    return;
+  }
+
+  // ── Page header (course switching lives in the sidebar) ───────
+  const headerActions: HTMLElement[] = [];
+  if (uc.isOwn) {
+    const teach = button('Teacher dashboard', 'secondary');
+    teach.addEventListener('click', () => app.navigate('teacher'));
+    headerActions.push(teach);
+  }
   root.appendChild(
     pageHeader(C.subject, {
       subtitle: uc.isOwn
         ? `Taught by you · invite code ${uc.code}`
         : `Taught by ${C.teacher}`,
-      actions: [courseSwitcher()]
+      actions: headerActions
     })
   );
 
@@ -70,73 +82,33 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
 
   // ───────────────────────────── helpers ─────────────────────────────
 
-  function courseSwitcher(): HTMLElement {
+  function noCoursesState(): HTMLElement {
+    const isTeacher = profile.role === 'teacher';
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:relative';
-    const btn = button(`${C.subject}`, 'secondary');
-    btn.innerHTML =
-      `<span style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${C.subject}</span>` +
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
-    wrap.appendChild(btn);
-
-    const menu = document.createElement('div');
-    menu.style.cssText = [
-      'position:absolute;top:36px;right:0;width:248px;background:var(--bg-elevated)',
-      'border:1px solid var(--border-default);border-radius:10px',
-      'box-shadow:0 8px 28px rgba(0,0,0,0.13);padding:6px;display:none',
-      'flex-direction:column;gap:1px;z-index:250;animation:nm-rise 0.15s ease-out both'
-    ].join(';');
-
-    allCourses().forEach(c => {
-      const item = document.createElement('div');
-      item.style.cssText =
-        'display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:6px;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out)';
-      item.innerHTML =
-        `<div style="display:flex;flex-direction:column;gap:1px;min-width:0;flex:1">` +
-        `<span style="font-size:12.5px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.data.subject}</span>` +
-        `<span style="font-size:10.5px;color:var(--text-quaternary);font-family:var(--font-mono)">${c.code}${c.isOwn ? ' · you teach' : ''}</span>` +
-        `</div>` +
-        (c.id === uc.id
-          ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-text)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
-          : '');
-      item.addEventListener('mouseenter', () => {
-        item.style.background = 'rgba(0,0,0,0.05)';
-      });
-      item.addEventListener('mouseleave', () => {
-        item.style.background = 'transparent';
-      });
-      item.addEventListener('click', () => {
-        setActiveCourse(c.id);
-        app.navigate('home');
-      });
-      menu.appendChild(item);
-    });
-
-    const sep = document.createElement('div');
-    sep.style.cssText = 'height:1px;background:var(--border-subtle);margin:4px 6px';
-    menu.appendChild(sep);
-
-    const add = document.createElement('div');
-    add.style.cssText =
-      'display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--accent-text);transition:background-color var(--dur-fast) var(--ease-out)';
-    add.innerHTML =
-      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg><span>Join or create a course…</span>';
-    add.addEventListener('mouseenter', () => {
-      add.style.background = 'var(--accent-subtle-bg)';
-    });
-    add.addEventListener('mouseleave', () => {
-      add.style.background = 'transparent';
-    });
-    add.addEventListener('click', () => {
-      menu.style.display = 'none';
-      openCourseModal(app);
-    });
-    menu.appendChild(add);
-    wrap.appendChild(menu);
-
-    btn.addEventListener('click', () => {
-      menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
-    });
+    wrap.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;gap:14px;padding:64px 24px;text-align:center';
+    wrap.innerHTML =
+      '<div style="width:48px;height:48px;border-radius:12px;background:var(--accent-subtle-bg);display:flex;align-items:center;justify-content:center">' +
+      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-text)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>' +
+      '</div>' +
+      '<span style="font-size:17px;font-weight:600;color:var(--text-primary)">You’re not in any course yet</span>' +
+      `<span style="font-size:13px;color:var(--text-tertiary);line-height:1.55;max-width:420px">${
+        isTeacher
+          ? 'Create a course to start publishing weeks, notebooks and slides for your students.'
+          : 'Join a course with the invite code from your teacher — or try DEMO2025 for the demo course.'
+      }</span>`;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:4px';
+    const join = button('Join a course', isTeacher ? 'secondary' : 'primary');
+    join.addEventListener('click', () => openCourseModal(app, 'join'));
+    row.appendChild(join);
+    // Only teachers can create a course.
+    if (isTeacher) {
+      const create = button('Create a course', 'primary');
+      create.addEventListener('click', () => openCourseModal(app, 'create'));
+      row.appendChild(create);
+    }
+    wrap.appendChild(row);
     return wrap;
   }
 
@@ -471,7 +443,10 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
 }
 
 // ── Join / create course modal (prototype dialog style) ─────────────
-export function openCourseModal(app: NotebookMindApp): void {
+export function openCourseModal(
+  app: NotebookMindApp,
+  initialMode: 'join' | 'create' = 'join'
+): void {
   const overlay = document.createElement('div');
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:1100;background:var(--surface-overlay);display:flex;align-items:center;justify-content:center;font-family:var(--font-sans)';
@@ -489,8 +464,9 @@ export function openCourseModal(app: NotebookMindApp): void {
     '<span style="font-size:12.5px;color:var(--text-tertiary)">Join with an invite code, or create your own course as a teacher.</span>' +
     '</div>';
 
-  // Mode tabs (prototype segmented)
-  let mode: 'join' | 'create' = 'join';
+  // Mode tabs (prototype segmented). Students can only join.
+  const canCreate = profile.role === 'teacher';
+  let mode: 'join' | 'create' = canCreate ? initialMode : 'join';
   const track = document.createElement('div');
   track.style.cssText =
     'display:flex;gap:2px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:3px';
@@ -504,7 +480,12 @@ export function openCourseModal(app: NotebookMindApp): void {
   const joinTab = tabBtn('Join a course');
   const createTab = tabBtn('Create a course');
   track.appendChild(joinTab);
-  track.appendChild(createTab);
+  if (canCreate) {
+    track.appendChild(createTab);
+  } else {
+    // Students only join — no tab strip needed.
+    track.style.display = 'none';
+  }
   cardEl.appendChild(track);
 
   const body = document.createElement('div');

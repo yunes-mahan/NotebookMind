@@ -1,6 +1,6 @@
 import { NotebookMindApp } from './nbApp';
 import { activeCourse } from './courseStore';
-import { deckForPdf, IDeck, ISlide } from './slidesData';
+import { deckForPdf, IDeck, slideProse } from './slidesData';
 import { IPageData, extractPdfFull } from './pdfExtract';
 import { isConnected } from './supabase';
 import { getSupaWeekSlides } from './supabaseDB';
@@ -204,25 +204,10 @@ export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
 export function deckToPages(deck: IDeck): IPageData[] {
   return deck.slides.map((slide, i) => ({
     pageNumber: i + 1,
-    text: slideToText(slide),
+    text: slideProse(slide), // clean prose feeds quizzes & flashcards
     imageBase64: null,
     width: 1024,
-    height: 576
+    height: 576,
+    deckSlide: slide // structured slide drives the rich renderer
   }));
-}
-
-function slideToText(slide: ISlide): string {
-  const lines: string[] = [];
-  if (slide.eyebrow) lines.push(slide.eyebrow.toUpperCase());
-  if (slide.title) {
-    lines.push('──────────────────────────────────');
-    lines.push(slide.title);
-  }
-  if (slide.presenter) lines.push('\n' + slide.presenter);
-  if (slide.text) lines.push('\n' + slide.text);
-  if (slide.bullets?.length) {
-    lines.push('');
-    slide.bullets.forEach(b => lines.push('  •  ' + b));
-  }
-  return lines.join('\n');
 }

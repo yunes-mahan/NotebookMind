@@ -209,6 +209,12 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     } else {
       renderEditorChallenge(step.body, ch);
     }
+
+    // Scroll the freshly activated step into view so the flow continues fluently
+    // (done after the challenge renders so the final layout is centered).
+    requestAnimationFrame(() =>
+      step.wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    );
   }
 
   // ── Briefing rows ("This cell" / "Your task") ─────────────────
@@ -304,7 +310,8 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
       }
       void advance(ch, true);
     } else {
-      window.setTimeout(() => void advance(ch, false), 2200);
+      // Revealed answer — advance promptly (brief pause to register the reveal).
+      window.setTimeout(() => void advance(ch, false), 600);
     }
   }
 

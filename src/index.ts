@@ -80,37 +80,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
       palette.addItem({ command: 'notebookmind:open', category: 'NotebookMind' });
     }
 
-    // Inject a persistent orange button into the JupyterLab top bar
-    const injectTopBtn = (): boolean => {
-      if (document.getElementById('nm-topbar-btn')) return true;
-      const target =
-        document.querySelector('.jp-MenuBar') ??
-        document.querySelector('.lm-MenuBar') ??
-        document.querySelector('#jp-top-panel') ??
-        document.querySelector('.jp-Toolbar');
-      if (!target) return false;
-      const btn = document.createElement('button');
-      btn.id = 'nm-topbar-btn';
-      btn.textContent = '📓 NotebookMind';
-      btn.title = 'Open NotebookMind';
-      btn.style.cssText = [
-        'background:var(--nm-primary);color:#fff;border:none;border-radius:7px',
-        'padding:5px 14px;font-size:13px;font-weight:700;cursor:pointer',
-        'margin:3px 12px 3px auto;font-family:system-ui,sans-serif;',
-        'display:inline-block;vertical-align:middle;flex-shrink:0'
-      ].join(';');
-      btn.addEventListener('click', () => openApp());
-      target.appendChild(btn);
-      return true;
-    };
-
-    // Retry until the DOM is ready
-    if (!injectTopBtn()) {
-      const attempts = [500, 1500, 3000, 5000];
-      for (const delay of attempts) {
-        setTimeout(() => injectTopBtn(), delay);
-      }
-    }
+    // (No injected top-bar button — the app opens automatically after login,
+    // and can be reopened from the command palette via "Open NotebookMind".)
 
     // Show login overlay on startup
     const loginWidget = new LoginWidget(() => {
