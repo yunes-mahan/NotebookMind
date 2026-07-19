@@ -4,15 +4,13 @@
    every screen composes these so the whole app reads as one language.
    ───────────────────────────────────────────────────────────────────────── */
 
-/** NotebookMind brand mark — two rounded, offset parallelograms.
- * Transparent, single-colour, scales cleanly at any size. */
-export function logoSvg(size: number, color = 'currentColor'): string {
-  return (
-    `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
-    `<rect x="0.7" y="5.7" width="15.2" height="8.6" rx="4.1" transform="rotate(-42 8.3 10)" fill="${color}"></rect>` +
-    `<rect x="12.1" y="12.9" width="9.6" height="8.6" rx="4.1" transform="rotate(-42 16.9 17.2)" fill="${color}"></rect>` +
-    `</svg>`
-  );
+import { NM_LOGO_SRC } from './logoAsset';
+
+/** NotebookMind brand logo — the user-provided PNG (transparent, 89×122),
+ * rendered at a given box height with the original aspect ratio preserved. */
+export function logoImg(height: number): string {
+  const width = Math.round((height * 89) / 122);
+  return `<img src="${NM_LOGO_SRC}" alt="NotebookMind" width="${width}" height="${height}" style="display:block;height:${height}px;width:${width}px;object-fit:contain" />`;
 }
 
 export function button(

@@ -6,7 +6,7 @@ import { KernelRunner } from './kernelRunner';
 import { XpSession } from './xp';
 import { IChallenge } from './challenge';
 import { pointsEngine } from './points';
-import { button, avatar, logoSvg } from './uiKit';
+import { button, avatar, logoImg } from './uiKit';
 import { profile, clearUser, invited, MATES } from './friendsData';
 import {
   activeCourse,
@@ -289,7 +289,7 @@ export class NotebookMindApp extends Widget {
     brand.style.cssText =
       'display:flex;align-items:center;gap:8px;padding:16px 16px 14px';
     brand.innerHTML =
-      `<span style="display:inline-flex;flex:0 0 auto">${logoSvg(24, 'var(--accent)')}</span>` +
+      `<span style="display:inline-flex;flex:0 0 auto">${logoImg(24)}</span>` +
       '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">NotebookMind</span>';
     bar.appendChild(brand);
 
