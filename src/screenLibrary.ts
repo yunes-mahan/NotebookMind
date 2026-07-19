@@ -3,13 +3,23 @@ import { activeCourse } from './courseStore';
 import { deckForPdf, IDeck, slideProse } from './slidesData';
 import { IPageData, extractPdfFull } from './pdfExtract';
 import { isConnected } from './supabase';
-import { getSupaWeekSlides } from './supabaseDB';
+import { getSupaWeekSlides, savePersonalPdf, listPersonalMaterials } from './supabaseDB';
+import { askStoragePreference } from './storageChoice';
+import { localPut, localList } from './localStore';
 import { pageHeader, tag, maxWidth } from './uiKit';
 
 const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
-// Session-local list of PDFs the user uploaded (reopenable from the library).
-const uploadedDocs: Array<{ title: string; pages: IPageData[] }> = [];
+/** Reconstruct reader pages from a stored document's `parts`. */
+function partsToPages(parts: any[]): IPageData[] {
+  return (parts ?? []).map((p: any, i: number) => ({
+    pageNumber: i + 1,
+    text: p.text ?? '',
+    imageBase64: p.imageBase64 ?? null,
+    width: p.width ?? 1024,
+    height: p.height ?? 576
+  }));
+}
 
 /** "Slides & Papers" — prototype library layout. */
 export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
@@ -115,7 +125,7 @@ export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
   });
   root.appendChild(grid);
 
-  // ── Your uploads ──────────────────────────────────────────────
+  // ── Your uploads (personal, persisted local or web) ───────────
   const upWrap = document.createElement('div');
   upWrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   const upLbl = document.createElement('span');
@@ -123,7 +133,15 @@ export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
   upLbl.textContent = 'Your uploads';
   upWrap.appendChild(upLbl);
 
-  uploadedDocs.forEach(u => {
+  const upList = document.createElement('div');
+  upList.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+  upWrap.appendChild(upList);
+
+  const uploadRow = (
+    title: string,
+    pages: IPageData[],
+    where: 'local' | 'web'
+  ): HTMLElement => {
     const row = document.createElement('div');
     row.style.cssText =
       'display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--surface-card);border:1px solid var(--border-default);border-radius:9px;cursor:pointer;transition:border-color var(--dur-fast) var(--ease-out)';
@@ -135,11 +153,40 @@ export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
     });
     row.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red-400)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
-      `<span style="font-size:13px;font-weight:500;flex:1;color:var(--text-primary)">${u.title}</span>` +
-      `<span style="font-size:11.5px;color:var(--text-quaternary)">PDF · ${u.pages.length} pages</span>`;
-    row.addEventListener('click', () => app.openSlideReader(u.pages, u.title));
-    upWrap.appendChild(row);
-  });
+      `<span style="font-size:13px;font-weight:500;flex:1;color:var(--text-primary)">${title}</span>` +
+      `<span style="font-size:10.5px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.05em">${
+        where === 'web' ? 'Web' : 'On device'
+      }</span>` +
+      `<span style="font-size:11.5px;color:var(--text-quaternary)">PDF · ${pages.length} pages</span>`;
+    row.addEventListener('click', () => app.openSlideReader(pages, title));
+    return row;
+  };
+
+  const refreshUploads = async (): Promise<void> => {
+    upList.innerHTML = '';
+    const rows: HTMLElement[] = [];
+    // Web (account) uploads first, then on-device.
+    if (isConnected()) {
+      const web = await listPersonalMaterials().catch(() => []);
+      web
+        .filter(m => m.docType !== 'notebook')
+        .forEach(m => rows.push(uploadRow(m.title, partsToPages(m.parts), 'web')));
+    }
+    const local = await localList<{ title: string; pages: IPageData[] }>('pdfs').catch(
+      () => []
+    );
+    local.forEach(u => rows.push(uploadRow(u.title, u.pages, 'local')));
+
+    if (rows.length === 0) {
+      const empty = document.createElement('span');
+      empty.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
+      empty.textContent = 'Nothing yet — drop a PDF below to keep it here.';
+      upList.appendChild(empty);
+    } else {
+      rows.forEach(r => upList.appendChild(r));
+    }
+  };
+  void refreshUploads();
 
   // Dropzone
   const drop = document.createElement('div');
@@ -168,7 +215,25 @@ export function renderLibrary(host: HTMLElement, app: NotebookMindApp): void {
     try {
       const res = await extractPdfFull(file);
       const title = file.name.replace(/\.pdf$/i, '');
-      uploadedDocs.push({ title, pages: res.pages });
+      // Personal upload → ask where to keep it so it survives a reload.
+      const pref = await askStoragePreference('PDF');
+      if (pref === 'web' && isConnected()) {
+        statusEl.textContent = 'Saving to your account…';
+        await savePersonalPdf({
+          title,
+          sourceText: res.fullText,
+          pages: res.pages
+        }).catch(() => null);
+      } else if (pref === 'local') {
+        await localPut('pdfs', {
+          id: `local-${Date.now()}`,
+          title,
+          pages: res.pages
+        }).catch(() => null);
+      }
+      statusEl.textContent = 'Drop a PDF here, or browse';
+      drop.style.pointerEvents = '';
+      void refreshUploads();
       app.openSlideReader(res.pages, title);
     } catch {
       statusEl.textContent = 'Could not read that PDF. Try another file.';

@@ -1,12 +1,6 @@
 import { NotebookMindApp } from './nbApp';
 import { ICourseWeek } from './courseData';
-import { activeCourse, activeData } from './courseStore';
-import {
-  TEACHER_STUDENTS,
-  CELL_PERF,
-  SUBMISSIONS,
-  insightsContext
-} from './teacherData';
+import { activeCourse, activeData, activeBackendCourseId } from './courseStore';
 import { teacherInsights, teacherAsk, generateChallenge, isAiReady } from './gemini';
 import { renderMarkdown } from './markdown';
 import { loadNotebook, parseUploadedNotebook, INbDoc } from './nbSource';
@@ -29,10 +23,14 @@ import {
   celebrate
 } from './uiKit';
 import { extractPdfFull } from './pdfExtract';
-import { upsertCourseWeekSlides } from './supabaseDB';
+import {
+  upsertCourseWeekSlides,
+  getCellFailStats,
+  getCourseActivity,
+  ICellFailStat,
+  ICourseActivity
+} from './supabaseDB';
 import { isConnected } from './supabase';
-
-const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
 type Tab = 'overview' | 'content';
 
@@ -178,98 +176,193 @@ function textArea(value = '', rows = 4): HTMLTextAreaElement {
 }
 
 // ── Overview ──────────────────────────────────────────────────────
+/** One row of the struggle chart, derived from real cell-attempt stats. */
+interface IStruggleRow {
+  label: string;
+  struggle: number; // 0–100, higher = more students struggled (1 - first-try rate)
+  firstTryPct: number;
+  attempts: number;
+}
+
+/** Trim a raw notebook key/path into a compact label. */
+function shortKey(key: string): string {
+  const base = key.split('/').pop() ?? key;
+  const name = base.replace(/\.ipynb$/i, '');
+  return name.length > 26 ? name.slice(0, 25) + '…' : name;
+}
+
+function toStruggleRows(stats: ICellFailStat[]): IStruggleRow[] {
+  return stats.map(s => ({
+    label: `${shortKey(s.notebook_key)} · Cell ${s.cell_index + 1}`,
+    struggle: Math.round((1 - s.success_rate) * 100),
+    firstTryPct: Math.round(s.success_rate * 100),
+    attempts: s.total_attempts
+  }));
+}
+
+/** Colored-dot KPI tile (prototype styling). */
+function kpiTile(
+  value: string,
+  label: string,
+  sub: string,
+  color = 'var(--text-primary)'
+): HTMLElement {
+  const d = document.createElement('div');
+  d.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:15px 16px;display:flex;flex-direction:column;gap:9px';
+  d.innerHTML =
+    `<div style="display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:${color}"></span>` +
+    `<span style="font-size:10.5px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;line-height:1.3">${label}</span></div>` +
+    `<span style="font-size:28px;font-weight:600;font-family:var(--font-mono);letter-spacing:-0.02em;line-height:1;color:${color}">${value}</span>` +
+    `<span style="font-size:11.5px;color:var(--text-tertiary);line-height:1.35">${sub}</span>`;
+  return d;
+}
+
+/** Centered dashed empty-state card. */
+function analyticsEmpty(title: string, body: string): HTMLElement {
+  const empty = document.createElement('div');
+  empty.style.cssText =
+    'display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 24px;background:var(--bg-panel);border:1px dashed var(--border-strong);border-radius:10px;text-align:center';
+  empty.innerHTML =
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>' +
+    `<span style="font-size:13px;font-weight:600;color:var(--text-primary)">${title}</span>` +
+    `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.55;max-width:420px">${body}</span>`;
+  return empty;
+}
+
+// ── Overview — real, anonymous aggregate analytics from Supabase ──
 function renderOverview(host: HTMLElement): void {
   host.style.cssText = 'display:flex;flex-direction:column;gap:14px';
-  if (!activeCourse().isDemo) {
-    const empty = document.createElement('div');
-    empty.style.cssText =
-      'display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 24px;background:var(--bg-panel);border:1px dashed var(--border-strong);border-radius:10px;text-align:center';
-    empty.innerHTML =
-      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>' +
-      '<span style="font-size:13px;font-weight:600;color:var(--text-primary)">No student activity yet</span>' +
-      '<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.55;max-width:400px">Aggregate analytics appear here once students join with your invite code and work through notebooks.</span>';
-    host.appendChild(empty);
+
+  const courseId = activeBackendCourseId();
+  if (!courseId) {
+    host.appendChild(
+      analyticsEmpty(
+        'Analytics aren’t connected for this course',
+        'Live class analytics are available for the connected demo course. Locally-created courses aren’t wired to the analytics backend yet.'
+      )
+    );
     return;
   }
-  const avgFirst = Math.round(
-    TEACHER_STUDENTS.reduce((s, r) => s + r.firstTryPct, 0) / TEACHER_STUDENTS.length
-  );
 
-  // KPI tiles (prototype: colored dot + caps label + 28px mono value + sub)
-  const kpiTile = (
-    value: string,
-    label: string,
-    sub: string,
-    color = 'var(--text-primary)'
-  ): HTMLElement => {
-    const d = document.createElement('div');
-    d.style.cssText =
-      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:15px 16px;display:flex;flex-direction:column;gap:9px';
-    d.innerHTML =
-      `<div style="display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:${color}"></span>` +
-      `<span style="font-size:10.5px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;line-height:1.3">${label}</span></div>` +
-      `<span style="font-size:28px;font-weight:600;font-family:var(--font-mono);letter-spacing:-0.02em;line-height:1;color:${color}">${value}</span>` +
-      `<span style="font-size:11.5px;color:var(--text-tertiary);line-height:1.35">${sub}</span>`;
-    return d;
-  };
-  const stats = document.createElement('div');
-  stats.style.cssText =
-    'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
-  stats.appendChild(
-    kpiTile(String(TEACHER_STUDENTS.length), 'Active students', 'worked in a notebook this week')
-  );
-  stats.appendChild(kpiTile(`${avgFirst}%`, 'Avg first-try rate', 'across all challenges'));
-  stats.appendChild(
-    kpiTile(String(SUBMISSIONS.length), 'Submissions this week', 'notebook runs completed')
-  );
-  stats.appendChild(
-    kpiTile(
-      String(CELL_PERF.filter(p => p.struggle >= 60).length),
-      'High-struggle cells',
-      'need your attention',
-      'var(--yellow-500)'
-    )
-  );
-  host.appendChild(stats);
+  const loading = spinner('Loading class analytics…');
+  host.appendChild(loading);
 
-  // Struggle (left, wide) + Topic mastery (right)
-  const grid = document.createElement('div');
-  grid.style.cssText =
-    'display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px;align-items:start';
-  grid.appendChild(struggleCard());
-  grid.appendChild(topicMastery());
-  host.appendChild(grid);
+  void Promise.all([
+    getCellFailStats(courseId).catch(() => [] as ICellFailStat[]),
+    getCourseActivity(courseId).catch(() => null)
+  ]).then(([cellStats, activity]) => {
+    loading.remove();
+    const act: ICourseActivity = activity ?? {
+      submissionCount: 0,
+      activeStudents: 0,
+      avgFirstTryPct: 0,
+      totalXp: 0,
+      recent: []
+    };
 
-  // AI insights — text + "Ask for improvements" input.
+    if (cellStats.length === 0 && act.submissionCount === 0) {
+      host.appendChild(
+        analyticsEmpty(
+          'No student activity yet',
+          'Aggregate analytics appear here once students join with your invite code and work through notebooks in Learn mode.'
+        )
+      );
+      return;
+    }
+
+    const struggles = toStruggleRows(cellStats);
+    const highStruggle = struggles.filter(s => s.struggle >= 50).length;
+
+    // KPI tiles
+    const stats = document.createElement('div');
+    stats.style.cssText =
+      'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
+    stats.appendChild(kpiTile(String(act.activeStudents), 'Active students', 'submitted a notebook'));
+    stats.appendChild(kpiTile(`${act.avgFirstTryPct}%`, 'Avg first-try rate', 'across submissions'));
+    stats.appendChild(kpiTile(String(act.submissionCount), 'Submissions', 'notebook runs completed'));
+    stats.appendChild(
+      kpiTile(String(highStruggle), 'High-struggle cells', 'need your attention', 'var(--yellow-500)')
+    );
+    host.appendChild(stats);
+
+    // Struggle (left, wide) + Topic mastery (right) — only when we have per-cell data.
+    if (struggles.length > 0) {
+      const grid = document.createElement('div');
+      grid.style.cssText =
+        'display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px;align-items:start';
+      grid.appendChild(struggleCard(struggles));
+      grid.appendChild(topicMastery(struggles));
+      host.appendChild(grid);
+    }
+
+    // AI insights — grounded in the real per-cell data.
+    host.appendChild(insightsCard(struggles, act));
+  });
+}
+
+/** Build a real data context string for the AI from the aggregates. */
+function buildInsightsContext(rows: IStruggleRow[], act: ICourseActivity): string {
+  const perf = rows.length
+    ? rows
+        .map(
+          r =>
+            `- ${r.label}: ${r.firstTryPct}% first-try over ${r.attempts} attempt(s) (struggle ${r.struggle}/100)`
+        )
+        .join('\n')
+    : '(no per-cell data yet)';
+  return `Class: ${act.activeStudents} active students, ${act.submissionCount} notebook submissions, avg first-try ${act.avgFirstTryPct}%.\n\nPer-cell first-try success (worst first):\n${perf}`;
+}
+
+/** A locally-computed real summary, shown when AI isn't configured. */
+function localInsights(rows: IStruggleRow[]): string {
+  if (rows.length === 0) {
+    return 'Students have submitted notebooks, but there isn’t enough per-cell data yet to pinpoint where they struggle. Encourage more Learn-mode practice.';
+  }
+  const worst = rows.slice(0, 3);
+  const lines = worst
+    .map(r => `- **${r.label}** — ${r.firstTryPct}% first-try over ${r.attempts} attempt(s).`)
+    .join('\n');
+  return `## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
+}
+
+/** AI-insights card with a real-data fallback + the "ask" chat. */
+function insightsCard(rows: IStruggleRow[], act: ICourseActivity): HTMLElement {
+  const context = buildInsightsContext(rows, act);
   const aiCard = document.createElement('div');
   aiCard.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px';
   const aiHead = document.createElement('div');
   aiHead.style.cssText = 'display:flex;align-items:center;gap:8px';
   const aiTitle = document.createElement('span');
-  aiTitle.style.cssText =
-    'font-size:13.5px;font-weight:600;color:var(--text-primary)';
+  aiTitle.style.cssText = 'font-size:13.5px;font-weight:600;color:var(--text-primary)';
   aiTitle.textContent = 'AI insights';
   aiHead.appendChild(aiTitle);
-  aiHead.appendChild(tag('Generated', 'accent'));
+  aiHead.appendChild(tag(isAiReady() ? 'Generated' : 'From your data', 'accent'));
   aiCard.appendChild(aiHead);
+
   const insHost = document.createElement('div');
-  insHost.style.cssText =
-    'font-size:13px;line-height:1.65;color:var(--text-secondary)';
-  insHost.appendChild(renderMarkdown(DUMMY_INSIGHTS));
+  insHost.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
+  insHost.appendChild(renderMarkdown(localInsights(rows)));
   aiCard.appendChild(insHost);
-  void teacherInsights(insightsContext())
-    .then(text => {
-      insHost.innerHTML = '';
-      insHost.appendChild(renderMarkdown(text));
-    })
-    .catch(() => undefined);
-  aiCard.appendChild(teacherChat());
-  host.appendChild(aiCard);
+
+  // Upgrade to an AI-written report when a key is configured — still grounded
+  // in the real context so it never invents cells that don't exist.
+  if (isAiReady()) {
+    void teacherInsights(context)
+      .then(text => {
+        insHost.innerHTML = '';
+        insHost.appendChild(renderMarkdown(text));
+      })
+      .catch(() => undefined);
+  }
+
+  aiCard.appendChild(teacherChat(context));
+  return aiCard;
 }
 
-/** Where students struggle — horizontal indigo bars (prototype). */
-function struggleCard(): HTMLElement {
+/** Where students struggle — horizontal indigo bars, from real cell stats. */
+function struggleCard(rows: IStruggleRow[]): HTMLElement {
   const c = document.createElement('div');
   c.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px';
@@ -283,54 +376,53 @@ function struggleCard(): HTMLElement {
 
   const list = document.createElement('div');
   list.style.cssText = 'display:flex;flex-direction:column;gap:10px';
-  const maxStruggle = Math.max(...CELL_PERF.map(p => p.struggle));
-  [...CELL_PERF]
-    .sort((a, b) => b.struggle - a.struggle)
-    .forEach(p => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;flex-direction:column;gap:5px';
-      row.title = `${p.cell} · Week ${p.week}\n${p.firstTryPct}% first-try · ${p.avgAttempts} avg tries\n${p.issue}`;
-      const lblRow = document.createElement('div');
-      lblRow.style.cssText = 'display:flex;align-items:baseline;gap:10px';
-      lblRow.innerHTML =
-        `<span style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.cell} · W${p.week}</span>` +
-        `<span style="flex:0 0 auto;font-size:11.5px;font-family:var(--font-mono);color:var(--text-tertiary)">${p.struggle}</span>`;
-      const track = document.createElement('div');
-      track.style.cssText =
-        'height:8px;border-radius:4px;background:var(--gray-800);overflow:hidden';
-      const fill = document.createElement('div');
-      const alpha = p.struggle >= 55 ? 1 : p.struggle >= 35 ? 0.72 : 0.45;
-      fill.style.cssText = `height:100%;border-radius:4px;background:rgba(94,106,210,${alpha});width:${Math.round((p.struggle / maxStruggle) * 100)}%`;
-      track.appendChild(fill);
-      row.appendChild(lblRow);
-      row.appendChild(track);
-      list.appendChild(row);
-    });
+  const ordered = [...rows].sort((a, b) => b.struggle - a.struggle).slice(0, 8);
+  const maxStruggle = Math.max(1, ...ordered.map(p => p.struggle));
+  ordered.forEach(p => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;flex-direction:column;gap:5px';
+    row.title = `${p.label}\n${p.firstTryPct}% first-try · ${p.attempts} attempt(s)`;
+    const lblRow = document.createElement('div');
+    lblRow.style.cssText = 'display:flex;align-items:baseline;gap:10px';
+    lblRow.innerHTML =
+      `<span style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.label}</span>` +
+      `<span style="flex:0 0 auto;font-size:11.5px;font-family:var(--font-mono);color:var(--text-tertiary)">${p.struggle}</span>`;
+    const track = document.createElement('div');
+    track.style.cssText =
+      'height:8px;border-radius:4px;background:var(--gray-800);overflow:hidden';
+    const fill = document.createElement('div');
+    const alpha = p.struggle >= 55 ? 1 : p.struggle >= 35 ? 0.72 : 0.45;
+    fill.style.cssText = `height:100%;border-radius:4px;background:rgba(94,106,210,${alpha});width:${Math.round((p.struggle / maxStruggle) * 100)}%`;
+    track.appendChild(fill);
+    row.appendChild(lblRow);
+    row.appendChild(track);
+    list.appendChild(row);
+  });
   c.appendChild(list);
 
   const hint = document.createElement('span');
   hint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
   hint.textContent =
-    'Struggle score = wrong first attempts + hint requests + reveals, per cell.';
+    'Struggle score = share of students who did NOT solve the cell on the first try.';
   c.appendChild(hint);
   return c;
 }
 
 /** Topic mastery — "Going well" (green) vs "Needs review" (yellow) bars. */
-function topicMastery(): HTMLElement {
+function topicMastery(rows: IStruggleRow[]): HTMLElement {
   const c = document.createElement('div');
   c.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:16px';
   c.innerHTML =
     '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Topic mastery</span>';
 
-  const sorted = [...CELL_PERF].sort((a, b) => b.firstTryPct - a.firstTryPct);
+  const sorted = [...rows].sort((a, b) => b.firstTryPct - a.firstTryPct);
   const strengths = sorted.slice(0, 3);
-  const weaknesses = sorted.slice(-3).reverse();
+  const weaknesses = sorted.slice(-3).reverse().filter(w => !strengths.includes(w));
 
   const makeList = (
     title: string,
-    items: typeof strengths,
+    items: IStruggleRow[],
     color: string
   ): HTMLElement => {
     const col = document.createElement('div');
@@ -340,7 +432,7 @@ function topicMastery(): HTMLElement {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;flex-direction:column;gap:5px';
       row.innerHTML =
-        `<div style="display:flex;align-items:baseline;gap:10px"><span style="flex:1;min-width:0;font-size:12.5px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.cell}</span>` +
+        `<div style="display:flex;align-items:baseline;gap:10px"><span style="flex:1;min-width:0;font-size:12.5px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.label}</span>` +
         `<span style="flex:0 0 auto;font-size:11.5px;font-family:var(--font-mono);color:${color}">${p.firstTryPct}%</span></div>` +
         `<div style="height:6px;border-radius:3px;background:var(--gray-800);overflow:hidden"><div style="height:100%;border-radius:3px;background:${color === 'var(--green-400)' ? 'var(--green-500)' : 'var(--yellow-500)'};width:${Math.min(100, p.firstTryPct)}%"></div></div>`;
       col.appendChild(row);
@@ -349,17 +441,16 @@ function topicMastery(): HTMLElement {
   };
 
   c.appendChild(makeList('Going well', strengths, 'var(--green-400)'));
-  const sep = document.createElement('div');
-  sep.style.cssText = 'height:1px;background:var(--border-subtle)';
-  c.appendChild(sep);
-  c.appendChild(makeList('Needs review', weaknesses, 'var(--yellow-500)'));
+  if (weaknesses.length) {
+    const sep = document.createElement('div');
+    sep.style.cssText = 'height:1px;background:var(--border-subtle)';
+    c.appendChild(sep);
+    c.appendChild(makeList('Needs review', weaknesses, 'var(--yellow-500)'));
+  }
   return c;
 }
 
-const DUMMY_INSIGHTS =
-  '## Where students struggle\n\n- **Compare study groups** has the lowest first-try rate (38%). The named-aggregation syntax and *mean vs sum* trip students up — add a worked example to the Week 2 slides.\n- **Compute the exam score** (55%) — the sign of the sleep term causes errors. A short note on reading a formula before running would help.\n- **Correlation analysis** (47%) — `idxmax` vs `idxmin` is a recurring confusion.\n\n**Suggested action:** unlock a short review notebook on group-by and correlation before Week 4, and clarify the teacher note on aggregation.';
-
-function teacherChat(): HTMLElement {
+function teacherChat(context: string): HTMLElement {
   const wrap = document.createElement('div');
   const log = document.createElement('div');
   log.style.cssText =
@@ -412,7 +503,7 @@ function teacherChat(): HTMLElement {
     log.scrollTop = log.scrollHeight;
     send.disabled = true;
     try {
-      const ans = await teacherAsk(q, insightsContext(), history.slice(0, -1));
+      const ans = await teacherAsk(q, context, history.slice(0, -1));
       thinking.textContent = ans;
       history.push({ role: 'assistant', text: ans });
     } catch {
@@ -719,8 +810,10 @@ function weekAdmin(
       : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>Slides'),
     '.pdf',
     async file => {
-      // If Supabase is connected, extract + upload; otherwise mark locally.
-      if (!isConnected()) {
+      // Upload to the DB when connected AND this course is backend-backed;
+      // otherwise keep the slide reference local to the session.
+      const cid = activeBackendCourseId();
+      if (!isConnected() || !cid) {
         w.slides = { pdf: 'local', label: `${file.name} (uploaded)` };
         repaint();
         return;
@@ -729,7 +822,7 @@ function weekAdmin(
       try {
         const result = await extractPdfFull(file);
         await upsertCourseWeekSlides({
-          courseId: DEMO_COURSE_ID,
+          courseId: cid,
           weekNumber: w.week,
           weekTheme: w.theme,
           topics: w.topics,

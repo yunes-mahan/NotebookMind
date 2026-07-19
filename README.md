@@ -1,108 +1,133 @@
-# notebookmind
+# NotebookMind
 
-[![Github Actions Status](https://github.com/yun/notebookmind/workflows/Build/badge.svg)](https://github.com/yun/notebookmind/actions/workflows/build.yml)
+**A gamified learning layer for Jupyter notebooks.** Students learn a course's
+notebooks cell-by-cell through AI-generated challenges (fix-the-bug, write-the-cell,
+multiple-choice), earn XP, and compare on a course leaderboard. Teachers create
+courses, publish weekly slides & notebooks, and see **live, anonymous class
+analytics** (where students struggle, first-try rates, AI insights).
 
-Gamified learning layer for Jupyter Notebooks
+It is a JupyterLab 4 extension: a **TypeScript** frontend (`src/`) + a **Python**
+server extension (`notebookmind/`), backed by a real **Supabase** (Postgres) project
+for auth, courses, enrollment, XP, leaderboards and analytics.
 
-This extension is composed of a Python package named `notebookmind`
-for the server extension and a NPM package named `notebookmind`
-for the frontend extension.
+---
 
-## Requirements
+## 1. Quick start (run the app)
 
-- JupyterLab >= 4.0.0
+> Windows + PowerShell. The virtual environment (`venv/`) and a built extension are
+> already included, and `start.ps1` sets the API keys.
 
-## Install
-
-To install the extension, execute:
-
-```bash
-pip install notebookmind
+```powershell
+cd C:\Users\yunes\Desktop\PI
+.\start.ps1
 ```
 
-## Uninstall
+Then open the URL it prints (it includes a token), e.g.:
 
-To remove the extension, execute:
-
-```bash
-pip uninstall notebookmind
+```
+http://localhost:8888/lab?token=...
 ```
 
-## Troubleshoot
+The **NotebookMind login screen appears automatically** as an overlay. Sign in with
+one of the accounts below. (You can reopen the panel any time from the Command
+Palette → “Open NotebookMind”.)
 
-If you are seeing the frontend extension, but it is not working, check
-that the server extension is enabled:
+The app runs in **connected mode** (real Supabase backend) — you should *not* see a
+“demo mode / no backend” banner on the login screen.
 
-```bash
-jupyter server extension list
+---
+
+## 2. Test accounts & course
+
+These are disposable accounts on the shared Supabase project (the publishable/anon key
+is safe to be public — row-level security protects the data).
+
+| Role | Email | Password |
+|------|-------|----------|
+| **Professor** (teacher) | `notebookmind.prof@gmail.com` | `Teacher123!` |
+| **Student** | `notebookmind.student@gmail.com` | `Student123!` |
+
+**Demo course:** *Data Analysis with Python* — **invite code `DEMO2025`**.
+The professor owns it; the student (and 7 seeded classmates) are enrolled.
+
+**Seeded classmates** (so the leaderboard & analytics show live data): Alice, Priya,
+Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, all password
+`Student123!`, all enrolled in the demo course and opted into the leaderboard.
+
+### What to try
+- **As the professor:** sign in → the **Teacher** tab. The Overview shows real,
+  anonymous aggregates — active students, average first-try rate, submissions, a
+  “Where students struggle” chart and “Topic mastery”, all computed from the DB.
+- **As a student:** sign in → **Course** → open a notebook → **Learn** to solve
+  challenges (earns XP, records anonymous telemetry). Open **Leaderboard**, click
+  **Show me on the leaderboard** (opt-in) to see the course ranking. Join a course
+  with an **invite code** (`DEMO2025`) from the sidebar course switcher.
+- **Local, no backend:** on the Course screen, **“Bring your own notebook”** lets you
+  upload any `.ipynb` and learn it — this works with no account/DB.
+
+---
+
+## 3. Run the tests
+
+The backend feature suite exercises the real Supabase backend (login, signup, roles,
+create/join course, XP sync, course leaderboard, documents, notes, flashcards, the
+teacher analytics aggregates, and slide authoring). It prints PASS/FAIL per feature
+and exits non-zero if anything fails.
+
+```powershell
+node test-backend.js
 ```
 
-If the server extension is installed and enabled, but you are not seeing
-the frontend extension, check the frontend extension is installed:
+Expected: **all checks pass** (a couple may show **SKIP** — the signup check skips if
+Supabase’s hourly confirmation-email limit is hit, and the live AI-generation check
+skips unless an AI key is set). To also run the live AI test:
 
-```bash
-jupyter labextension list
+```powershell
+$env:GEMINI_API_KEY="<your key>"; node test-backend.js
 ```
 
-## Contributing
+The suite targets the shared demo project + test accounts by default; override with
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `NM_TEACHER_EMAIL/PW`, `NM_STUDENT_EMAIL/PW`.
 
-### Development install
+---
 
-Note: You will need NodeJS to build the extension package.
+## 4. Rebuild after code changes
 
-The `jlpm` command is JupyterLab's pinned version of
-[yarn](https://yarnpkg.com/) that is installed with JupyterLab. You may use
-`yarn` or `npm` in lieu of `jlpm` below.
-
-```bash
-# Clone the repo to your local environment
-# Change directory to the notebookmind directory
-
-# Set up a virtual environment and install package in development mode
-python -m venv .venv
-source .venv/bin/activate
-pip install --editable "."
-
-# Link your development version of the extension with JupyterLab
-jupyter labextension develop . --overwrite
-# Server extension must be manually installed in develop mode
-jupyter server extension enable notebookmind
-
-# Rebuild extension Typescript source after making changes
-# IMPORTANT: Unlike the steps above which are performed only once, do this step
-# every time you make a change.
-jlpm build
+```powershell
+npx tsc --sourceMap                                                   # TS -> lib/
+.\venv\Scripts\python.exe -m jupyter labextension build --development True .   # bundle
+.\start.ps1                                                           # sync + restart
 ```
 
-You can watch the source directory and run JupyterLab at the same time in different terminals to watch for changes in the extension's source and automatically rebuild the extension.
+Then hard-refresh the JupyterLab browser tab.
 
-```bash
-# Watch the source directory in one terminal, automatically rebuilding when needed
-jlpm watch
-# Run JupyterLab in another terminal
-jupyter lab
-```
+---
 
-With the watch command running, every saved change will immediately be built locally and available in your running JupyterLab. Refresh JupyterLab to load the change in your browser (you may need to wait several seconds for the extension to be rebuilt).
+## 5. Architecture
 
-By default, the `jlpm build` command generates the source maps for this extension to make it easier to debug using the browser dev tools. To also generate source maps for the JupyterLab core extensions, you can run the following command:
+| Layer | Where | What |
+|-------|-------|------|
+| Frontend | `src/*.ts` | Screens (home, learn, explain, reader, teacher, leaderboard), course store, XP, Gemini/Anthropic calls |
+| Server ext | `notebookmind/` | Serves API keys + Supabase config to the frontend (`/notebookmind/config`) |
+| Backend | Supabase (Postgres) | `profiles`, `courses`, `course_enrollments`, `course_weeks`, `documents`, `section_notes`, `flashcards`, `quiz_sessions`, `point_events`, `notebook_submissions`, `cell_attempts`, `cell_comments`, `notebook_challenges`; RPCs `get_course_leaderboard`, `join_course_by_invite`, `increment_points` |
+| DB setup | `migration*.sql` (1–11) | Schema + RLS + RPCs (already applied to the shared project) |
+| Seed | `seed-demo.js`, `seed-comments.js` | Fake classmates + demo-course activity, and seeded Explain-mode comments |
 
-```bash
-jupyter lab build --minimize=False
-```
+The Supabase schema is already provisioned on the shared project, so **graders do not
+need to run any migrations** — just `start.ps1` and sign in. The `migration*.sql`
+files and `seed-demo.js` document how the DB was built and can re-provision a fresh
+project (they need a Postgres `DATABASE_URL`).
 
-### Development uninstall
+---
 
-```bash
-# Server extension must be manually disabled in develop mode
-jupyter server extension disable notebookmind
-pip uninstall notebookmind
-```
+## 6. Troubleshooting
 
-In development mode, you will also need to remove the symlink created by `jupyter labextension develop`
-command. To find its location, you can run `jupyter labextension list` to figure out where the `labextensions`
-folder is located. Then you can remove the symlink named `notebookmind` within that folder.
-
-### Packaging the extension
-
-See [RELEASE](RELEASE.md)
+- **Login shows a “no backend / demo mode” banner** → the Supabase config didn’t load.
+  Confirm the config endpoint works:
+  `curl "http://localhost:8888/notebookmind/config?token=<token>"` should return the
+  `supabase_url`/`supabase_anon_key`. Re-run `.\start.ps1`.
+- **Port already in use** → JupyterLab will pick 8889/8890; use the URL it prints.
+- **Extension not showing** → `.\venv\Scripts\python.exe -m jupyter labextension list`
+  should list `notebookmind ... enabled ok`.
+- **Backend tests fail on “project reachable”** → the free Supabase project may be
+  cold-starting; re-run `node test-backend.js` (the suite retries logins).

@@ -85,7 +85,7 @@ export const COURSE: ICourse = {
       topic: 'Arrays & DataFrames',
       blurb: 'Arrays, vectorisation and the DataFrame mental model.',
       week: 1,
-      status: 'done',
+      status: 'available',
       deps: []
     },
     'nb-reproducible': {
@@ -94,7 +94,7 @@ export const COURSE: ICourse = {
       topic: 'Reproducibility',
       blurb: 'Seeding random data so results never drift.',
       week: 1,
-      status: 'done',
+      status: 'available',
       deps: ['nb-foundations']
     },
     'nb-students': {
@@ -113,7 +113,7 @@ export const COURSE: ICourse = {
       topic: 'Aggregation',
       blurb: 'Summary statistics and group aggregations on sales data.',
       week: 2,
-      status: 'done',
+      status: 'available',
       deps: ['nb-foundations']
     },
     'nb-correlation': {

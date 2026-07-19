@@ -7,6 +7,7 @@ import { ICommandPalette } from '@jupyterlab/apputils';
 import { requestAPI } from './request';
 import { NotebookMindApp } from './nbApp';
 import { LoginWidget } from './auth';
+import { loadCoursesFromDB, loadProgressFromDB } from './courseStore';
 import { initGemini } from './gemini';
 import { ttsEngine } from './tts';
 import { initSupabase } from './supabase';
@@ -83,10 +84,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
     // (No injected top-bar button — the app opens automatically after login,
     // and can be reopened from the command palette via "Open NotebookMind".)
 
-    // Show login overlay on startup
+    // Show login overlay on startup. After login, pull the user's DB courses
+    // (taught + enrolled) so they appear before the app renders.
     const loginWidget = new LoginWidget(() => {
       loginWidget.node.remove();
-      openApp();
+      void Promise.all([loadCoursesFromDB(), loadProgressFromDB()]).finally(() =>
+        openApp()
+      );
     });
 
     const shellNode =

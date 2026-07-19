@@ -20,17 +20,15 @@ QUICK START
    (Port may be 8889 or 8890 if 8888 is already used — check terminal output)
 
 4. The NotebookMind LOGIN SCREEN appears as an overlay automatically.
-   Sign in with your Supabase email/password, or use "Continue as guest".
-
-5. An orange "📓 NotebookMind" button appears in the top menu bar.
-   Click it any time to reopen the panel.
+   Sign in with your Supabase email/password. (With no backend configured it
+   falls back to demo mode, where any email/password is accepted.)
 
 
 OPENING THE PLUGIN
 ------------------
 • The login overlay appears automatically on load.
-• If dismissed: click the orange "📓 NotebookMind" button in the top bar.
-• Command Palette (Ctrl+Shift+C) → search "NotebookMind" → "Open NotebookMind"
+• To reopen after closing: Command Palette (Ctrl+Shift+C) →
+  search "NotebookMind" → "Open NotebookMind"
 
 
 ================================================================
@@ -64,7 +62,7 @@ PI/
 ├── learn_demo.ipynb           ← Course demo notebook
 │
 ├── src/                       ← TypeScript source (edit these)
-│   ├── index.ts               ← Plugin entry point + launcher button
+│   ├── index.ts               ← Plugin entry point (auto-opens after login)
 │   ├── nbApp.ts               ← Main app widget (split-view layout)
 │   ├── screenHome.ts          ← Course home: weeks, notebooks, slides
 │   ├── screenReader.ts        ← Full slide/paper reader (notes, quiz, flashcards)
@@ -106,17 +104,19 @@ URL:     https://wzooaiwmnsqvxxcoormp.supabase.co
 
 Tables:
   profiles            — user XP, display name, role (student/teacher)
-  courses             — course registry (default: DS101, invite code DEMO2025)
+  courses             — course registry (demo: "Data Analysis with Python", invite DEMO2025)
   course_enrollments  — which students are in which course
   course_weeks        — weekly content (theme, topics, slides document link)
   course_notebooks    — notebook assignments per week
   documents           — uploaded papers/slides (extracted text + pages)
   section_notes       — per-page notes saved by each user
-  flashcards          — generated flashcard decks
-  quiz_sessions       — quiz results
+  flashcards          — generated flashcard decks (persist across reloads)
+  quiz_sessions       — saved quizzes + answers (generate once, resume later)
   notebook_submissions — completed notebook records
   cell_attempts       — anonymous attempt data for teacher view
-  point_events        — XP transaction log
+  cell_comments       — Explain-mode teacher notes + student comments
+  notebook_challenges — cached Learn-mode challenges (no AI re-run on reload)
+  point_events        — XP transaction log (course-scoped for leaderboards)
 
 
 ================================================================

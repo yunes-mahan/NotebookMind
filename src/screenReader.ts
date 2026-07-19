@@ -4,7 +4,8 @@ import { isConnected } from './supabase';
 import {
   upsertDocument, getSectionNotes, addPoints,
   getDocumentFlashcards, upsertFlashcardsForSection, updateFlashcard,
-  updateDocumentSections, IFlashcard
+  updateDocumentSections, IFlashcard,
+  getSavedQuiz, saveQuiz, updateQuizProgress
 } from './supabaseDB';
 import { pointsEngine } from './points';
 import { spinner, backArrow } from './uiKit';
@@ -71,6 +72,11 @@ const state: IReaderState = {
   fcViewMode: 'section',
   activeTab: 'quiz', isFullscreen: false
 };
+
+// Which "<docId>:<section>" we've already tried to load a saved quiz for, so
+// switching sections reloads the right saved quiz and we don't refetch on every
+// re-render. Resets to null on a full page reload (module re-init).
+let _quizLoadedKey: string | null = null;
 
 // ── Spaced repetition ──────────────────────────────────────────
 
@@ -1009,6 +1015,39 @@ function _renderQuizTab(host: HTMLElement): void {
     return;
   }
 
+  // First time we render this section's quiz: reload the saved quiz (questions +
+  // any answers so far) from the DB so a reload resumes it instead of asking to
+  // regenerate. Keyed by doc+section so navigating sections reloads correctly.
+  const loadKey = `${state.docId}:${state.currentSection}`;
+  if (_quizLoadedKey !== loadKey) {
+    _quizLoadedKey = loadKey;
+    state.quizQuestions = null;
+    state.quizAnswers = [];
+    state.quizIdx = 0;
+    state.quizDone = false;
+    if (state.docId && isConnected()) {
+      host.innerHTML = '';
+      host.appendChild(spinner('Loading saved quiz…'));
+      void getSavedQuiz(state.docId, state.currentSection)
+        .then(saved => {
+          if (saved) {
+            state.quizQuestions = saved.questions;
+            state.quizAnswers = saved.answers;
+            state.quizIdx = Math.min(saved.answers.length, saved.questions.length);
+            state.quizDone = saved.done;
+          }
+        })
+        .catch(() => null)
+        .finally(() => {
+          if (state.activeTab === 'quiz') {
+            host.innerHTML = '';
+            _renderQuizTab(host);
+          }
+        });
+      return;
+    }
+  }
+
   if (state.quizDone && state.quizAnswers.length > 0) {
     _renderQuizReport(host);
     return;
@@ -1053,6 +1092,13 @@ Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],
         state.quizQuestions = localQuiz(sec.title, sec.text);
       }
       state.quizLoading = false;
+      // Persist the generated quiz so a reload reuses it (no AI re-run).
+      _quizLoadedKey = `${state.docId}:${state.currentSection}`;
+      if (isConnected() && state.docId && state.quizQuestions) {
+        void saveQuiz(state.docId, state.currentSection, state.quizQuestions).catch(
+          () => null
+        );
+      }
       if (isConnected()) {
         await addPoints(2, 'reader_quiz_start', state.docTitle).catch(() => null);
         pointsEngine.addPoints(2, 'reader_quiz_start');
@@ -1129,6 +1175,16 @@ function _renderQuizQuestion(host: HTMLElement): void {
       correct = answer === q.correct_answer;
     }
     state.quizAnswers.push({ question: q, user_answer: answer, correct, feedback: q.explanation });
+    // Save progress after each answer so the user can leave and resume.
+    if (isConnected() && state.docId) {
+      const s = state.quizAnswers.filter(a => a.correct).length;
+      void updateQuizProgress(
+        state.docId,
+        state.currentSection,
+        state.quizAnswers,
+        s
+      ).catch(() => null);
+    }
 
     feedback.style.cssText = `padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.55;animation:nm-rise 0.2s var(--ease-out) both;${
       correct

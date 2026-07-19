@@ -47,7 +47,8 @@ export async function setLeaderboardOptIn(optIn: boolean): Promise<void> {
 export async function addPoints(
   points: number,
   reason: string,
-  docTitle?: string
+  docTitle?: string,
+  courseId?: string
 ): Promise<void> {
   const client = getClient();
   const user = getCurrentUser();
@@ -55,12 +56,16 @@ export async function addPoints(
     return;
   }
   await Promise.all([
+    // course_id scopes this event to the course it was earned in, so the
+    // course leaderboard can rank by per-course XP (null = personal work).
     client.from('point_events').insert({
       user_id: user.id,
       points,
       reason,
-      document_title: docTitle ?? null
+      document_title: docTitle ?? null,
+      course_id: courseId ?? null
     }),
+    // Still bump the global personal total (home / profile "Total XP").
     client.rpc('increment_points', { p_user_id: user.id, p_points: points })
   ]);
 }
@@ -145,6 +150,63 @@ export async function saveNotebookSubmission(opts: {
   });
 }
 
+export interface IMyLearningStats {
+  cellsAttempted: number;
+  cellsFirstTry: number;
+  notebooksCompleted: number;
+}
+
+/**
+ * The signed-in user's own learning totals, summed from their notebook
+ * submissions. Used to make the home "Solved" / "First try" tiles persist
+ * across reloads instead of resetting to the session counters.
+ */
+export async function getMyLearningStats(): Promise<IMyLearningStats> {
+  const empty: IMyLearningStats = {
+    cellsAttempted: 0,
+    cellsFirstTry: 0,
+    notebooksCompleted: 0
+  };
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return empty;
+  }
+  const { data } = await client
+    .from('notebook_submissions')
+    .select('cells_attempted,cells_first_try')
+    .eq('user_id', user.id);
+  if (!data) {
+    return empty;
+  }
+  let cellsAttempted = 0;
+  let cellsFirstTry = 0;
+  for (const row of data as any[]) {
+    cellsAttempted += row.cells_attempted ?? 0;
+    cellsFirstTry += row.cells_first_try ?? 0;
+  }
+  return { cellsAttempted, cellsFirstTry, notebooksCompleted: data.length };
+}
+
+/** The distinct notebook keys the signed-in user has completed (any course). */
+export async function listMyCompletedNotebookKeys(): Promise<string[]> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return [];
+  }
+  const { data } = await client
+    .from('notebook_submissions')
+    .select('notebook_key')
+    .eq('user_id', user.id);
+  if (!data) {
+    return [];
+  }
+  return Array.from(
+    new Set((data as any[]).map(r => r.notebook_key).filter(Boolean))
+  );
+}
+
 // ── Cell Attempts (anonymous) ─────────────────────────────────
 
 export async function recordCellAttempt(
@@ -165,6 +227,199 @@ export async function recordCellAttempt(
     succeeded,
     attempt_number: attemptNumber
   });
+}
+
+// ── Courses: create / join / list (DB-backed course loop) ────
+
+export interface IDbCourse {
+  id: string;
+  name: string;
+  code: string;
+  invite_code: string;
+  isOwn: boolean;
+}
+
+export interface IDbWeek {
+  week_number: number;
+  theme: string;
+  topics: string[];
+  hasSlides: boolean;
+}
+
+/** Create a course in the DB; the caller becomes its teacher. */
+export async function createCourseDB(name: string): Promise<IDbCourse | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const code = Array.from({ length: 6 }, () =>
+    'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32))
+  ).join('');
+  const { data, error } = await client
+    .from('courses')
+    .insert({ name, code, invite_code: code, teacher_id: user.id, is_active: true })
+    .select('id,name,code,invite_code')
+    .single();
+  if (error || !data) {
+    return null;
+  }
+  return { id: data.id, name: data.name, code: data.code, invite_code: data.invite_code, isOwn: true };
+}
+
+/** Delete a course you own (RLS: teacher only). Cascades weeks/enrollments. */
+export async function deleteCourseDB(courseId: string): Promise<void> {
+  const client = getClient();
+  if (!client) {
+    return;
+  }
+  await client.from('courses').delete().eq('id', courseId);
+}
+
+/** Leave a course you joined (removes your own enrollment). */
+export async function leaveCourseDB(courseId: string): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client.from('course_enrollments').delete().eq('course_id', courseId).eq('user_id', user.id);
+}
+
+/** Enroll the signed-in user via invite code (SECURITY DEFINER RPC). */
+export async function joinCourseByInvite(code: string): Promise<IDbCourse | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const { data, error } = await client.rpc('join_course_by_invite', { p_code: code });
+  if (error || !data || !data.length) {
+    return null;
+  }
+  const r = data[0] as any;
+  return { id: r.id, name: r.name, code: r.code, invite_code: r.invite_code, isOwn: false };
+}
+
+/** Courses the signed-in user teaches or is enrolled in. */
+export async function listMyCourses(): Promise<IDbCourse[]> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return [];
+  }
+  const byId = new Map<string, IDbCourse>();
+  // Courses I teach.
+  const own = await client
+    .from('courses')
+    .select('id,name,code,invite_code')
+    .eq('teacher_id', user.id);
+  for (const c of (own.data as any[]) ?? []) {
+    byId.set(c.id, { id: c.id, name: c.name, code: c.code, invite_code: c.invite_code, isOwn: true });
+  }
+  // Courses I'm enrolled in.
+  const enr = await client
+    .from('course_enrollments')
+    .select('courses(id,name,code,invite_code)')
+    .eq('user_id', user.id);
+  for (const row of (enr.data as any[]) ?? []) {
+    const c = row.courses;
+    if (c && !byId.has(c.id)) {
+      byId.set(c.id, { id: c.id, name: c.name, code: c.code, invite_code: c.invite_code, isOwn: false });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+/** The published weeks of a course (for showing materials to enrolled students). */
+export async function getCourseWeeks(courseId: string): Promise<IDbWeek[]> {
+  const client = getClient();
+  if (!client) {
+    return [];
+  }
+  const { data } = await client
+    .from('course_weeks')
+    .select('week_number,theme,topics,slides_document_id')
+    .eq('course_id', courseId)
+    .order('week_number');
+  return ((data as any[]) ?? []).map(w => ({
+    week_number: w.week_number,
+    theme: w.theme ?? `Week ${w.week_number}`,
+    topics: Array.isArray(w.topics) ? w.topics : [],
+    hasSlides: !!w.slides_document_id
+  }));
+}
+
+// ── Teacher: course activity aggregate (from submissions) ────
+
+export interface ICourseActivity {
+  submissionCount: number;
+  activeStudents: number;
+  avgFirstTryPct: number;
+  totalXp: number;
+  recent: Array<{
+    notebook_title: string;
+    xp_earned: number;
+    first_try_pct: number;
+    cells_attempted: number;
+    completed_at: string;
+  }>;
+}
+
+/**
+ * Anonymous, aggregate class activity for the teacher dashboard, derived from
+ * real notebook_submissions. No per-student identities are exposed.
+ */
+export async function getCourseActivity(courseId: string): Promise<ICourseActivity> {
+  const empty: ICourseActivity = {
+    submissionCount: 0,
+    activeStudents: 0,
+    avgFirstTryPct: 0,
+    totalXp: 0,
+    recent: []
+  };
+  const client = getClient();
+  if (!client) {
+    return empty;
+  }
+  const { data } = await client
+    .from('notebook_submissions')
+    .select('user_id,notebook_title,xp_earned,cells_attempted,cells_first_try,completed_at')
+    .eq('course_id', courseId)
+    .order('completed_at', { ascending: false });
+  if (!data || data.length === 0) {
+    return empty;
+  }
+
+  const students = new Set<string>();
+  let firstTrySum = 0;
+  let attemptedSum = 0;
+  let totalXp = 0;
+  for (const row of data as any[]) {
+    if (row.user_id) {
+      students.add(row.user_id);
+    }
+    firstTrySum += row.cells_first_try ?? 0;
+    attemptedSum += row.cells_attempted ?? 0;
+    totalXp += row.xp_earned ?? 0;
+  }
+
+  return {
+    submissionCount: data.length,
+    activeStudents: students.size,
+    avgFirstTryPct: attemptedSum > 0 ? Math.round((firstTrySum / attemptedSum) * 100) : 0,
+    totalXp,
+    recent: (data as any[]).slice(0, 6).map(r => ({
+      notebook_title: r.notebook_title ?? 'Notebook',
+      xp_earned: r.xp_earned ?? 0,
+      first_try_pct:
+        r.cells_attempted > 0
+          ? Math.round(((r.cells_first_try ?? 0) / r.cells_attempted) * 100)
+          : 0,
+      cells_attempted: r.cells_attempted ?? 0,
+      completed_at: r.completed_at
+    }))
+  };
 }
 
 // ── Teacher: anonymous aggregate cell failure stats ──────────
@@ -271,6 +526,298 @@ export async function upsertDocument(opts: {
   const { data } = await client
     .from('documents')
     .upsert(payload, { onConflict: 'id' })
+    .select('id')
+    .single();
+  return data?.id ?? null;
+}
+
+// ── Generated content persistence (quizzes + Learn challenges) ───
+
+export interface ISavedQuiz {
+  questions: any[];
+  answers: any[];
+  done: boolean;
+}
+
+/** The saved quiz for a document section, if one was generated before. */
+export async function getSavedQuiz(
+  documentId: string,
+  sectionIndex: number
+): Promise<ISavedQuiz | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const { data } = await client
+    .from('quiz_sessions')
+    .select('questions,answers')
+    .eq('user_id', user.id)
+    .eq('document_id', documentId)
+    .eq('section_index', sectionIndex)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data || !Array.isArray(data.questions) || data.questions.length === 0) {
+    return null;
+  }
+  const questions = data.questions as any[];
+  const answers = Array.isArray(data.answers) ? (data.answers as any[]) : [];
+  return { questions, answers, done: answers.length >= questions.length };
+}
+
+/** Save a freshly generated quiz so it's reused instead of regenerated. */
+export async function saveQuiz(
+  documentId: string,
+  sectionIndex: number,
+  questions: any[]
+): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  // One saved quiz per (user, document, section) — replace any prior one.
+  await client
+    .from('quiz_sessions')
+    .delete()
+    .eq('user_id', user.id)
+    .eq('document_id', documentId)
+    .eq('section_index', sectionIndex);
+  await client.from('quiz_sessions').insert({
+    user_id: user.id,
+    document_id: documentId,
+    section_index: sectionIndex,
+    mode: 'section',
+    questions,
+    answers: [],
+    total: questions.length
+  });
+}
+
+/** Persist quiz progress (answers so far + score) so the user can resume. */
+export async function updateQuizProgress(
+  documentId: string,
+  sectionIndex: number,
+  answers: any[],
+  score: number
+): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client
+    .from('quiz_sessions')
+    .update({ answers, score })
+    .eq('user_id', user.id)
+    .eq('document_id', documentId)
+    .eq('section_index', sectionIndex);
+}
+
+/** All saved Learn-mode challenges for a notebook, keyed by cell index. */
+export async function getNotebookChallenges(
+  notebookKey: string
+): Promise<Record<number, any>> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return {};
+  }
+  const { data } = await client
+    .from('notebook_challenges')
+    .select('cell_index,payload')
+    .eq('user_id', user.id)
+    .eq('notebook_key', notebookKey);
+  const out: Record<number, any> = {};
+  for (const row of (data as any[]) ?? []) {
+    out[row.cell_index] = row.payload;
+  }
+  return out;
+}
+
+/** Cache a generated challenge so the AI doesn't rebuild it next time. */
+export async function saveNotebookChallenge(
+  notebookKey: string,
+  cellIndex: number,
+  payload: any
+): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client.from('notebook_challenges').upsert(
+    {
+      user_id: user.id,
+      notebook_key: notebookKey,
+      cell_index: cellIndex,
+      payload,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'user_id,notebook_key,cell_index' }
+  );
+}
+
+// ── Explain-mode cell comments (teacher notes + student comments) ─
+
+export interface ICellComment {
+  id: string;
+  role: string; // 'teacher' | 'student'
+  author_name: string | null;
+  body: string;
+  created_at: string;
+}
+
+/** Comments on one notebook cell, shared across the course. */
+export async function getCellComments(
+  courseId: string | undefined,
+  notebookKey: string,
+  cellIndex: number
+): Promise<ICellComment[]> {
+  const client = getClient();
+  if (!client) {
+    return [];
+  }
+  let q = client
+    .from('cell_comments')
+    .select('id,role,author_name,body,created_at')
+    .eq('notebook_key', notebookKey)
+    .eq('cell_index', cellIndex)
+    .order('created_at', { ascending: true });
+  q = courseId ? q.eq('course_id', courseId) : q.is('course_id', null);
+  const { data } = await q;
+  return (data as ICellComment[]) ?? [];
+}
+
+/** Post a comment (teacher note or student comment) on a cell. */
+export async function addCellComment(opts: {
+  courseId?: string;
+  notebookKey: string;
+  cellIndex: number;
+  role: string;
+  authorName: string;
+  body: string;
+}): Promise<ICellComment | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const { data } = await client
+    .from('cell_comments')
+    .insert({
+      user_id: user.id,
+      course_id: opts.courseId ?? null,
+      notebook_key: opts.notebookKey,
+      cell_index: opts.cellIndex,
+      role: opts.role,
+      author_name: opts.authorName,
+      body: opts.body
+    })
+    .select('id,role,author_name,body,created_at')
+    .single();
+  return (data as ICellComment) ?? null;
+}
+
+// ── Personal materials (uploads outside any course) ─────────
+
+export interface IPersonalMaterial {
+  id: string;
+  title: string;
+  docType: string; // 'paper' (PDF) | 'notebook'
+  parts: any[];
+}
+
+/** The user's personal uploads synced to their account (not course material). */
+export async function listPersonalMaterials(): Promise<IPersonalMaterial[]> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return [];
+  }
+  const { data } = await client
+    .from('documents')
+    .select('id,title,doc_type,parts')
+    .eq('user_id', user.id)
+    .eq('is_course_material', false)
+    .order('last_opened_at', { ascending: false });
+  return ((data as any[]) ?? []).map(d => ({
+    id: d.id,
+    title: d.title,
+    docType: d.doc_type ?? 'paper',
+    parts: Array.isArray(d.parts) ? d.parts : []
+  }));
+}
+
+/** Save a personal PDF (its extracted pages) to the user's account. */
+export async function savePersonalPdf(opts: {
+  title: string;
+  sourceText: string;
+  pages: Array<{
+    pageNumber?: number;
+    text?: string;
+    imageBase64?: string | null;
+    width?: number;
+    height?: number;
+  }>;
+}): Promise<string | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const parts = opts.pages.map((p, i) => ({
+    index: i,
+    title: `Page ${p.pageNumber ?? i + 1}`,
+    text: p.text ?? '',
+    imageBase64: p.imageBase64 ?? null,
+    width: p.width ?? 1024,
+    height: p.height ?? 576
+  }));
+  const { data } = await client
+    .from('documents')
+    .insert({
+      user_id: user.id,
+      title: opts.title,
+      source_text: opts.sourceText,
+      original_full_text: opts.sourceText,
+      parts,
+      total_sections: parts.length,
+      doc_type: 'paper',
+      is_course_material: false,
+      last_opened_at: new Date().toISOString()
+    })
+    .select('id')
+    .single();
+  return data?.id ?? null;
+}
+
+/** Save a personal notebook (its code cells) to the user's account. */
+export async function savePersonalNotebook(opts: {
+  title: string;
+  cells: string[];
+}): Promise<string | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const source = opts.cells.join('\n\n');
+  const parts = opts.cells.map((src, i) => ({ index: i, text: src }));
+  const { data } = await client
+    .from('documents')
+    .insert({
+      user_id: user.id,
+      title: opts.title,
+      source_text: source,
+      original_full_text: source,
+      parts,
+      total_sections: parts.length,
+      doc_type: 'notebook',
+      is_course_material: false,
+      last_opened_at: new Date().toISOString()
+    })
     .select('id')
     .single();
   return data?.id ?? null;
