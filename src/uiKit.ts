@@ -10,7 +10,7 @@ import { NM_LOGO_SRC } from './logoAsset';
  * rendered at a given box height with the original aspect ratio preserved. */
 export function logoImg(height: number): string {
   const width = Math.round((height * 89) / 122);
-  return `<img src="${NM_LOGO_SRC}" alt="NotebookMind" width="${width}" height="${height}" style="display:block;height:${height}px;width:${width}px;object-fit:contain" />`;
+  return `<img src="${NM_LOGO_SRC}" alt="Runcell" width="${width}" height="${height}" style="display:block;height:${height}px;width:${width}px;object-fit:contain" />`;
 }
 
 export function button(

@@ -63,8 +63,8 @@ export class LoginWidget extends Widget {
     logoRow.style.cssText =
       'display:flex;flex-direction:column;gap:6px;align-items:center;text-align:center;margin-bottom:18px';
     logoRow.innerHTML = `
-      <span style="display:inline-flex">${logoImg(44)}</span>
-      <span style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)">NotebookMind</span>
+      <span style="display:inline-flex">${logoImg(36)}</span>
+      <span style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)">Runcell</span>
       <span style="font-size:12.5px;color:var(--text-tertiary)">Learn your course notebooks, cell by cell.</span>
     `;
     card.appendChild(logoRow);

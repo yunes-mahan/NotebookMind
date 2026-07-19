@@ -135,8 +135,8 @@ export class NotebookMindApp extends Widget {
     this.services = services;
     this.runner = new KernelRunner(services);
     this.id = 'notebookmind-app';
-    this.title.label = 'NotebookMind';
-    this.title.caption = 'NotebookMind — gamified learning';
+    this.title.label = 'Runcell';
+    this.title.caption = 'Runcell — gamified learning';
     this.title.closable = true;
     this.addClass('nm-app');
     this._build();
@@ -289,8 +289,8 @@ export class NotebookMindApp extends Widget {
     brand.style.cssText =
       'display:flex;align-items:center;gap:8px;padding:16px 16px 14px';
     brand.innerHTML =
-      `<span style="display:inline-flex;flex:0 0 auto">${logoImg(24)}</span>` +
-      '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">NotebookMind</span>';
+      `<span style="display:inline-flex;flex:0 0 auto">${logoImg(18)}</span>` +
+      '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">Runcell</span>';
     bar.appendChild(brand);
 
     // Course switcher (global: switch · join · create) — always visible

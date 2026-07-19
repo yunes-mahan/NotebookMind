@@ -417,7 +417,7 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>' +
       '<div style="display:flex;flex-direction:column;gap:2px">' +
       '<span style="font-size:13px;font-weight:500;color:var(--text-secondary)">Bring your own notebook</span>' +
-      '<span style="font-size:12px;color:var(--text-quaternary)">Upload a .ipynb file — NotebookMind turns it into a learning session</span>' +
+      '<span style="font-size:12px;color:var(--text-quaternary)">Upload a .ipynb file — Runcell turns it into a learning session</span>' +
       '</div>';
     label.appendChild(fileInput);
 

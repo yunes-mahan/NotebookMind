@@ -218,6 +218,209 @@ export function deckForPdf(pdf: string): IDeck | undefined {
   return DECKS[pdf];
 }
 
+// ── Curated study content (quiz + flashcards) per deck ────────────────
+// Hand-written so the demo shows sensible questions instead of prose-derived
+// guesses. Keyed by deck title. Falls back to AI / local generation for
+// unknown documents (e.g. user-uploaded PDFs).
+
+export interface IStudyQuestion {
+  type: 'multiple_choice' | 'true_false' | 'fill_blank';
+  question: string;
+  options: string[]; // ignored for true_false / fill_blank
+  answer: string; // must match an option exactly for multiple_choice
+  explanation: string;
+}
+
+export interface IDeckStudy {
+  quiz: IStudyQuestion[];
+  flashcards: { front: string; back: string }[];
+}
+
+const STUDY: Record<string, IDeckStudy> = {
+  'PCA — Motivation & mathematics': {
+    quiz: [
+      {
+        type: 'multiple_choice',
+        question: 'When choosing a direction w, what does PCA maximize?',
+        options: [
+          'The variance of the projected data',
+          'The mean of the data',
+          'The number of features',
+          'The distance between two samples'
+        ],
+        answer: 'The variance of the projected data',
+        explanation: 'PCA seeks the unit direction along which the projection has the largest variance.'
+      },
+      {
+        type: 'true_false',
+        question:
+          'Enforcing ‖w‖ = 1 with a Lagrange multiplier turns the PCA objective into the eigenproblem Σw = λw.',
+        options: [],
+        answer: 'True',
+        explanation: 'Differentiating the constrained objective yields exactly Σw = λw.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'In Σw = λw, what does the eigenvalue λ represent?',
+        options: [
+          'The variance captured by that axis',
+          'The number of samples',
+          'The mean of the data',
+          'The correlation between two samples'
+        ],
+        answer: 'The variance captured by that axis',
+        explanation: 'Each eigenvalue is the amount of variance explained by its eigenvector.'
+      },
+      {
+        type: 'fill_blank',
+        question:
+          'PCA is equivalent to minimizing the squared ______ error — the best low-rank approximation.',
+        options: [],
+        answer: 'reconstruction',
+        explanation: 'The variance-maximizing and reconstruction-error views give the same eigenvectors.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'Why is high dimensionality a problem (the “curse”)?',
+        options: [
+          'Data becomes sparse and pairwise distances concentrate',
+          'Variance becomes negative',
+          'Models can never overfit',
+          'Eigenvalues always vanish'
+        ],
+        answer: 'Data becomes sparse and pairwise distances concentrate',
+        explanation: 'As dimension grows, points spread out and distances lose contrast, so we need a projection.'
+      }
+    ],
+    flashcards: [
+      { front: 'Principal component', back: 'An eigenvector of the covariance matrix — an orthogonal axis of maximal variance.' },
+      { front: 'PCA objective', back: 'Find the unit direction w that maximizes wᵀΣw (the projected variance), subject to ‖w‖ = 1.' },
+      { front: 'Eigenvalue λ in PCA', back: 'The variance captured by its eigenvector axis.' },
+      { front: 'Curse of dimensionality', back: 'As dimension grows, data becomes sparse, distances concentrate, and direct visualization is impossible.' },
+      { front: 'PCA as reconstruction', back: 'PCA minimizes squared reconstruction error; the top eigenvectors give the best low-rank approximation.' }
+    ]
+  },
+
+  'PCA — The algorithm, step by step': {
+    quiz: [
+      {
+        type: 'multiple_choice',
+        question: 'What is the first step of PCA?',
+        options: [
+          'Standardize features to zero mean and unit variance',
+          'Project onto the eigenvectors',
+          'Plot the raw data',
+          'Sort the samples'
+        ],
+        answer: 'Standardize features to zero mean and unit variance',
+        explanation: 'Standardizing (Z = (X − μ)/σ) prevents large-scale features from dominating the variance.'
+      },
+      {
+        type: 'fill_blank',
+        question: 'The covariance matrix is Σ = ZᵀZ / (n − ___).',
+        options: [],
+        answer: '1',
+        explanation: 'The n − 1 divisor gives the unbiased estimate of the covariance.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'The Wine dataset in the notebook has:',
+        options: [
+          '178 samples and 13 features',
+          '13 samples and 178 features',
+          '1000 samples and 3 features',
+          '100 samples and 50 features'
+        ],
+        answer: '178 samples and 13 features',
+        explanation: '178 wines described by 13 chemical measurements, across 3 cultivars.'
+      },
+      {
+        type: 'true_false',
+        question:
+          'Standardizing puts every feature on the same scale so scale differences don’t distort the variance PCA measures.',
+        options: [],
+        answer: 'True',
+        explanation: 'Without it, a large-range feature like proline would dominate purely because of its units.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'On standardized data, the covariance matrix Σ equals the:',
+        options: [
+          'Correlation matrix',
+          'Identity matrix',
+          'Projection matrix',
+          'Distance matrix'
+        ],
+        answer: 'Correlation matrix',
+        explanation: 'With unit-variance features, the diagonal is all 1s and Σ is the correlation matrix.'
+      }
+    ],
+    flashcards: [
+      { front: 'Step 1 — Standardize', back: 'Z = (X − μ) / σ: zero-mean, unit-variance features so scale doesn’t distort variance.' },
+      { front: 'Step 2 — Covariance', back: 'Σ = ZᵀZ / (n − 1): the d×d matrix of how features co-vary.' },
+      { front: 'Why standardize first?', back: 'Features span very different scales (proline in the hundreds vs hue near 1); standardizing stops big-scale features dominating.' },
+      { front: 'Wine dataset', back: '178 samples, 13 chemical features, 3 cultivars.' },
+      { front: 'Σ on standardized data', back: 'Equals the correlation matrix — diagonal entries are all 1.' }
+    ]
+  },
+
+  'PCA — Results & projection': {
+    quiz: [
+      {
+        type: 'multiple_choice',
+        question: 'Why use np.linalg.eigh (not eig) for the covariance matrix?',
+        options: [
+          'Σ is symmetric, so eigh returns real, orthonormal results',
+          'eig does not exist in NumPy',
+          'eigh is the only one that runs on floats',
+          'eigh randomly shuffles the axes'
+        ],
+        answer: 'Σ is symmetric, so eigh returns real, orthonormal results',
+        explanation: 'For symmetric matrices eigh is exact, real-valued and gives orthonormal eigenvectors.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'How much total variance do the first two components capture?',
+        options: ['About 55%', 'About 10%', 'Exactly 100%', 'About 90%'],
+        answer: 'About 55%',
+        explanation: 'PC1 (36%) + PC2 (19%) ≈ 55% of the total variance.'
+      },
+      {
+        type: 'fill_blank',
+        question: 'To get a 2-D embedding, project the standardized data onto the top-2 ______.',
+        options: [],
+        answer: 'eigenvectors',
+        explanation: 'Y = Z @ vecs[:, :2] projects onto the two leading eigenvectors.'
+      },
+      {
+        type: 'true_false',
+        question: 'PCA used the class labels y to separate the three cultivars in the 2-D plot.',
+        options: [],
+        answer: 'False',
+        explanation: 'PCA is unsupervised — it never uses y. The structure emerges from variance alone.'
+      },
+      {
+        type: 'multiple_choice',
+        question: 'After projecting onto the top-2 components, Y.shape is:',
+        options: ['(178, 2)', '(178, 13)', '(2, 178)', '(13, 2)'],
+        answer: '(178, 2)',
+        explanation: '178 samples, now described by 2 principal-component coordinates.'
+      }
+    ],
+    flashcards: [
+      { front: 'Explained variance ratio', back: 'evr = vals / vals.sum(): the fraction of total variance each component captures.' },
+      { front: 'eigh vs eig', back: 'Σ is symmetric → eigh gives real eigenvalues and orthonormal eigenvectors.' },
+      { front: 'Projection step', back: 'Y = Z @ vecs[:, :2]: multiply standardized data by the top-2 eigenvectors.' },
+      { front: 'PC1 + PC2 variance', back: '≈ 55% of total variance (36% + 19%) for the Wine dataset.' },
+      { front: 'PCA is unsupervised', back: 'It recovers structure from variance alone — the labels y are never used.' }
+    ]
+  }
+};
+
+export function deckStudy(title: string): IDeckStudy | undefined {
+  return STUDY[title];
+}
+
 /** Clean prose for a slide — used to seed quizzes & flashcards (no ASCII art). */
 export function slideProse(slide: ISlide): string {
   const parts: string[] = [];

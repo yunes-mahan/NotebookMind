@@ -8,7 +8,7 @@ import {
 } from './supabaseDB';
 import { pointsEngine } from './points';
 import { spinner, backArrow } from './uiKit';
-import { ISlide } from './slidesData';
+import { ISlide, deckStudy } from './slidesData';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -1040,17 +1040,27 @@ function _renderQuizTab(host: HTMLElement): void {
     return;
   }
 
-  // Idle: centered prompt (prototype)
+  // Curated study content for known decks takes precedence over generation.
+  const curated = deckStudy(state.docTitle);
+
+  // Idle: centered prompt
   const idle = document.createElement('div');
   idle.style.cssText =
     'display:flex;flex-direction:column;align-items:center;gap:10px;padding:26px 12px;text-align:center';
   idle.innerHTML =
     '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
-    `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">Test yourself on “${sec?.title ?? 'this section'}” with 5 AI-generated questions.</span>`;
+    `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${
+      curated
+        ? `Test your understanding of “${state.docTitle}” with ${curated.quiz.length} questions.`
+        : `Test yourself on “${sec?.title ?? 'this section'}” with 5 ${isAiReady() ? 'AI-generated' : 'demo'} questions.`
+    }</span>`;
   host.appendChild(idle);
 
-  const genBtn = _btn(isAiReady() ? 'Generate quiz' : 'Generate demo quiz', 'primary');
-  genBtn.disabled = !sec?.text;
+  const genBtn = _btn(
+    curated ? 'Start quiz' : isAiReady() ? 'Generate quiz' : 'Generate demo quiz',
+    'primary'
+  );
+  genBtn.disabled = !curated && !sec?.text;
   idle.appendChild(genBtn);
   genBtn.addEventListener('click', async () => {
     state.quizLoading = true;
@@ -1059,10 +1069,18 @@ function _renderQuizTab(host: HTMLElement): void {
     state.quizIdx = 0;
     state.quizDone = false;
     host.innerHTML = '';
-    host.appendChild(spinner(isAiReady() ? 'Generating quiz…' : 'Building demo quiz…'));
+    host.appendChild(spinner(curated ? 'Preparing quiz…' : isAiReady() ? 'Generating quiz…' : 'Building demo quiz…'));
     try {
-      if (isAiReady()) {
-        const text = sec.text.substring(0, 2000);
+      if (curated) {
+        state.quizQuestions = curated.quiz.map(q => ({
+          type: q.type,
+          question: q.question,
+          options: q.type === 'true_false' ? ['True', 'False'] : q.options,
+          correct_answer: q.answer,
+          explanation: q.explanation
+        }));
+      } else if (isAiReady()) {
+        const text = (sec?.text ?? '').substring(0, 2000);
         const prompt = `Generate exactly 5 quiz questions about this text. Return ONLY a valid JSON array with one question of each type: multiple_choice, true_false, fill_blank, matching, open_answer.
 Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],"correct_answer":"A","explanation":"..."},{"type":"true_false","question":"...","options":["True","False"],"correct_answer":"True","explanation":"..."},{"type":"fill_blank","question":"The ___ is ...","options":[],"correct_answer":"single word","explanation":"..."},{"type":"matching","question":"Match the terms","options":["Term1: Def1","Term2: Def2","Term3: Def3"],"correct_answer":["Def1","Def2","Def3"],"explanation":"..."},{"type":"open_answer","question":"Explain in your own words...","options":[],"correct_answer":"model answer here","explanation":"..."}]`;
         const raw = await askAboutCell(text, prompt, []);
@@ -1071,7 +1089,7 @@ Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],
         const questions = JSON.parse(match[0]) as IQuizQuestion[];
         state.quizQuestions = questions.slice(0, 5);
       } else {
-        state.quizQuestions = localQuiz(sec.title, sec.text);
+        state.quizQuestions = localQuiz(sec?.title ?? '', sec?.text ?? '');
       }
       state.quizLoading = false;
       if (isConnected()) {
@@ -1080,19 +1098,12 @@ Format: [{"type":"multiple_choice","question":"...","options":["A","B","C","D"],
       }
     } catch {
       // AI failed — fall back to the built-in demo quiz so the tool still works.
-      state.quizQuestions = localQuiz(sec.title, sec.text);
+      state.quizQuestions = localQuiz(sec?.title ?? '', sec?.text ?? '');
       state.quizLoading = false;
     }
     host.innerHTML = '';
     _renderQuizTab(host);
   });
-
-  if (!isAiReady()) {
-    const warn = document.createElement('span');
-    warn.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
-    warn.textContent = 'Demo mode — questions are generated from the section text.';
-    idle.appendChild(warn);
-  }
 }
 
 function _renderQuizQuestion(host: HTMLElement): void {
@@ -1426,10 +1437,14 @@ function _renderFlashcardsTab(host: HTMLElement): void {
     empty.innerHTML =
       '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2"></rect><path d="M22 4v12"></path></svg>' +
       `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${msg}</span>`;
-    const genBtn = _btn(isAiReady() ? 'Generate cards' : 'Generate demo cards', 'primary');
+    const hasCurated = !!deckStudy(state.docTitle);
+    const genBtn = _btn(
+      hasCurated ? 'Generate cards' : isAiReady() ? 'Generate cards' : 'Generate demo cards',
+      'primary'
+    );
     genBtn.addEventListener('click', () => _generateFlashcards(host));
     empty.appendChild(genBtn);
-    if (!isAiReady()) {
+    if (!hasCurated && !isAiReady()) {
       const w = document.createElement('span');
       w.style.cssText = 'font-size:11.5px;color:var(--text-quaternary)';
       w.textContent = 'Demo mode — cards are generated from the section text.';
@@ -1626,9 +1641,18 @@ async function _generateFlashcards(host: HTMLElement): Promise<void> {
 [{"front":"term or question","back":"definition or answer","card_type":"${cardTypes.join('|')}"},...]
 Use a different card_type for each card. Cover key concepts, definitions, and relationships.`;
 
+  // Curated cards for known decks take precedence over generation.
+  const curated = deckStudy(state.docTitle);
+
   try {
     let cards: Array<{ front: string; back: string; card_type: string }>;
-    if (isAiReady()) {
+    if (curated) {
+      cards = curated.flashcards.map(c => ({
+        front: c.front,
+        back: c.back,
+        card_type: 'term_definition'
+      }));
+    } else if (isAiReady()) {
       const raw = await askAboutCell(ctx, prompt, []);
       const match = raw.match(/\[[\s\S]*\]/);
       if (!match) throw new Error('No JSON array');

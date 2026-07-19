@@ -9,7 +9,7 @@ export function renderLeaderboard(container: HTMLElement): void {
   header.style.cssText = 'margin-bottom:16px';
   const title = document.createElement('div');
   title.style.cssText = 'font-size:16px;font-weight:700;color:var(--nm-fg);margin-bottom:4px';
-  title.textContent = '📚 NotebookMind Leaderboard';
+  title.textContent = '📚 Runcell Leaderboard';
   const sub = document.createElement('div');
   sub.style.cssText = 'font-size:12px;color:var(--nm-fg-muted)';
   sub.textContent = 'Demo Notebook — Week 12';

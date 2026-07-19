@@ -70,14 +70,14 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Register command
     app.commands.addCommand('notebookmind:open', {
-      label: 'Open NotebookMind',
-      caption: 'Open the NotebookMind gamified learning panel',
+      label: 'Open Runcell',
+      caption: 'Open the Runcell gamified learning panel',
       execute: () => openApp()
     });
 
     // Add to Command Palette under a named category
     if (palette) {
-      palette.addItem({ command: 'notebookmind:open', category: 'NotebookMind' });
+      palette.addItem({ command: 'notebookmind:open', category: 'Runcell' });
     }
 
     // (No injected top-bar button — the app opens automatically after login,
