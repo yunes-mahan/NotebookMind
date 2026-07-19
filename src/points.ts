@@ -1,4 +1,5 @@
 import { addPoints as dbAddPoints } from './supabaseDB';
+import { activeBackendCourseId } from './courseStore';
 
 export const EXPLAIN_CELL = 1;
 export const QUIZ_CORRECT = 2;
@@ -23,9 +24,27 @@ export class PointsEngine {
     );
   }
 
+  /**
+   * Seed the counter from the persisted per-user total (profiles.points) on
+   * login — no DB write, since this value already came from the DB. Keeps the
+   * home "Total XP" consistent with the leaderboard and the signed-in account.
+   */
+  syncTotal(total: number): void {
+    this._total = Math.max(0, Math.floor(total));
+    document.dispatchEvent(
+      new CustomEvent('notebookmind:points', {
+        detail: { total: this._total, delta: 0, reason: 'sync' }
+      })
+    );
+  }
+
   addPoints(amount: number, reason: string): void {
     this._total += amount;
-    dbAddPoints(amount, reason).catch(() => null);
+    // Attribute the XP to the active course (undefined for personal work) so
+    // course leaderboards stay independent of each other.
+    dbAddPoints(amount, reason, undefined, activeBackendCourseId()).catch(
+      () => null
+    );
     document.dispatchEvent(
       new CustomEvent('notebookmind:points', {
         detail: { total: this._total, delta: amount, reason }

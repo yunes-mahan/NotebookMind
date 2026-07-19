@@ -1,5 +1,8 @@
 import { NotebookMindApp } from './nbApp';
-import { loadNotebook, parseUploadedNotebook } from './nbSource';
+import { loadNotebook, parseUploadedNotebook, INbDoc } from './nbSource';
+import { askStoragePreference } from './storageChoice';
+import { localPut, localList } from './localStore';
+import { savePersonalNotebook, listPersonalMaterials } from './supabaseDB';
 import { isAiReady } from './gemini';
 import { ICourseNotebook, ICourseWeek } from './courseData';
 import { deckForPdf } from './slidesData';
@@ -10,9 +13,12 @@ import { pointsEngine } from './points';
 import {
   activeCourse,
   hasCourses,
-  joinByCode,
-  createCourse,
-  coursePercentOf
+  joinCourse,
+  createOwnCourse,
+  courseProgressOf,
+  notebookDisplayStatus,
+  isNotebookOpenable,
+  getMyStats
 } from './courseStore';
 import { profile } from './friendsData';
 import {
@@ -24,8 +30,6 @@ import {
   progressRing,
   celebrate
 } from './uiKit';
-
-const DEMO_COURSE_ID = '00000000-0000-0000-0000-000000000001';
 
 // Session-local: the AI-key warning can be dismissed like in the prototype.
 let warnDismissed = false;
@@ -78,9 +82,86 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   C.weeks.forEach(w => weeksWrap.appendChild(weekBox(w)));
   root.appendChild(weeksWrap);
 
+  root.appendChild(personalNotebooks());
   root.appendChild(uploadRow());
 
   // ───────────────────────────── helpers ─────────────────────────────
+
+  /** Open a set of code cells as a Learn session (personal notebook). */
+  function openCells(title: string, cells: string[]): void {
+    if (cells.length === 0) {
+      return;
+    }
+    const doc: INbDoc = { name: title, key: title, cells };
+    app.doc = doc;
+    app.explainAllowed = true;
+    app.navigate('session');
+  }
+
+  /** "Your notebooks" — personal uploads persisted on device or in the account. */
+  function personalNotebooks(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+
+    const row = (title: string, cells: string[], where: 'local' | 'web'): HTMLElement => {
+      const r = document.createElement('div');
+      r.style.cssText =
+        'display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--surface-card);border:1px solid var(--border-default);border-radius:9px;cursor:pointer;transition:border-color var(--dur-fast) var(--ease-out)';
+      r.addEventListener('mouseenter', () => (r.style.borderColor = 'var(--border-strong)'));
+      r.addEventListener('mouseleave', () => (r.style.borderColor = 'var(--border-default)'));
+      r.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-text)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
+        `<span style="font-size:13px;font-weight:500;flex:1;color:var(--text-primary)">${title}</span>` +
+        `<span style="font-size:10.5px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.05em">${
+          where === 'web' ? 'Web' : 'On device'
+        }</span>` +
+        `<span style="font-size:11.5px;color:var(--text-quaternary)">${cells.length} cells</span>`;
+      r.addEventListener('click', () => openCells(title, cells));
+      return r;
+    };
+
+    const refresh = async (): Promise<void> => {
+      list.innerHTML = '';
+      const rows: HTMLElement[] = [];
+      if (isConnected()) {
+        const web = await listPersonalMaterials().catch(() => []);
+        web
+          .filter(m => m.docType === 'notebook')
+          .forEach(m =>
+            rows.push(
+              row(
+                m.title,
+                (m.parts ?? []).map((p: any) => p.text ?? ''),
+                'web'
+              )
+            )
+          );
+      }
+      const local = await localList<{ title: string; cells: string[] }>(
+        'notebooks'
+      ).catch(() => []);
+      local.forEach(u => rows.push(row(u.title, u.cells, 'local')));
+
+      if (rows.length === 0) {
+        wrap.style.display = 'none';
+        return;
+      }
+      wrap.style.display = 'flex';
+      const lbl = document.createElement('span');
+      lbl.style.cssText =
+        'font-size:13px;font-weight:600;color:var(--text-secondary)';
+      lbl.textContent = 'Your notebooks';
+      wrap.innerHTML = '';
+      wrap.appendChild(lbl);
+      rows.forEach(r => list.appendChild(r));
+      wrap.appendChild(list);
+    };
+    wrap.style.display = 'none';
+    void refresh();
+    return wrap;
+  }
 
   function noCoursesState(): HTMLElement {
     const isTeacher = profile.role === 'teacher';
@@ -162,10 +243,11 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   }
 
   function progressCard(): HTMLElement {
-    const pct = coursePercentOf(C);
+    const prog = courseProgressOf(C);
+    const pct = prog.pct;
     const week = C.weeks[C.currentWeek - 1] ?? C.weeks[0];
-    const allNb = Object.values(C.notebooks);
-    const doneNb = allNb.filter(n => n.status === 'done').length;
+    const doneNb = prog.done;
+    const totalNb = prog.total;
 
     const cardEl = document.createElement('div');
     cardEl.style.cssText =
@@ -182,7 +264,7 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
     ringText.style.cssText = 'display:flex;flex-direction:column;gap:3px';
     ringText.innerHTML =
       `<span style="font-size:22px;font-weight:600;letter-spacing:-0.02em;line-height:1;color:var(--text-primary)">${pct}<span style="font-size:15px;color:var(--text-tertiary)">%</span> <span style="font-size:14px;font-weight:500;color:var(--text-secondary)">complete</span></span>` +
-      `<span style="font-size:12.5px;color:var(--text-tertiary)">${doneNb} of ${allNb.length} notebooks done</span>`;
+      `<span style="font-size:12.5px;color:var(--text-tertiary)">${doneNb} of ${totalNb} notebooks done</span>`;
     ringSide.appendChild(ringText);
     top.appendChild(ringSide);
 
@@ -199,11 +281,16 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
         `<span style="font-size:10px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;white-space:nowrap">${label}</span>`;
       return d;
     };
+    // Solved / first-try: persisted per-user totals when connected (survive a
+    // reload), falling back to this session's counters in offline/demo mode.
+    const st = getMyStats();
+    const connected = isConnected();
+    const solved = connected ? st.cellsAttempted : app.cellsAttempted;
+    const firstTryBase = connected ? st.cellsFirstTry : app.cellsFirstTry;
+    const firstTryPct = solved ? Math.round((firstTryBase / solved) * 100) : 0;
     strip.appendChild(stat(String(pointsEngine.total), 'Total XP', true, true));
-    strip.appendChild(stat(String(app.cellsAttempted), 'Solved'));
-    strip.appendChild(
-      stat(app.cellsAttempted ? `${app.firstTryPct()}%` : '0%', 'First try')
-    );
+    strip.appendChild(stat(String(solved), 'Solved'));
+    strip.appendChild(stat(solved ? `${firstTryPct}%` : '0%', 'First try'));
     top.appendChild(strip);
     cardEl.appendChild(top);
 
@@ -278,7 +365,8 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
     spacer.style.flex = '1';
     head.appendChild(spacer);
 
-    if (deckForPdf(w.slides.pdf) || isConnected()) {
+    const hasOnline = isConnected() && !!uc.backendId && w.slides.pdf === 'online';
+    if (deckForPdf(w.slides.pdf) || hasOnline) {
       const slidesBtn = button('Week slides', 'ghost');
       slidesBtn.style.height = 'var(--control-sm)';
       slidesBtn.style.fontSize = '12px';
@@ -287,8 +375,8 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
         slidesBtn.textContent = '…';
         slidesBtn.style.pointerEvents = 'none';
         try {
-          if (isConnected()) {
-            const remote = await getSupaWeekSlides(DEMO_COURSE_ID, w.week).catch(
+          if (isConnected() && uc.backendId) {
+            const remote = await getSupaWeekSlides(uc.backendId, w.week).catch(
               () => null
             );
             if (remote) {
@@ -325,20 +413,22 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   }
 
   function notebookRow(nb: ICourseNotebook, first: boolean): HTMLElement {
-    const openable = nb.status === 'available' && !!nb.path;
-    const locked = nb.status === 'locked';
+    const shown = notebookDisplayStatus(nb);
+    const done = shown === 'done';
+    const openable = isNotebookOpenable(nb);
+    const locked = shown === 'locked';
 
     const row = document.createElement('div');
     row.style.cssText = [
       'display:flex;align-items:center;gap:12px;padding:10px 16px',
       first ? '' : 'border-top:1px solid var(--border-subtle)',
       'transition:background-color var(--dur-fast) var(--ease-out)',
-      openable ? 'cursor:pointer' : locked ? 'opacity:0.55' : ''
+      openable || done ? 'cursor:pointer' : 'opacity:0.55'
     ].join(';');
 
     row.appendChild(
       statusIcon(
-        nb.status === 'done' ? 'done' : nb.status === 'available' ? 'started' : 'backlog',
+        done ? 'done' : shown === 'available' ? 'started' : 'backlog',
         15
       )
     );
@@ -355,13 +445,13 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
     const label = document.createElement('span');
     label.style.cssText =
       'font-size:11.5px;font-weight:500;flex:0 0 auto;color:' +
-      (nb.status === 'done'
+      (done
         ? 'var(--brand-300)'
-        : nb.status === 'available'
+        : shown === 'available'
         ? 'var(--yellow-500)'
         : 'var(--text-quaternary)');
     label.textContent =
-      nb.status === 'done' ? 'Done' : nb.status === 'available' ? 'Available' : 'Locked';
+      done ? 'Done' : shown === 'available' ? 'Available' : 'Locked';
     row.appendChild(label);
 
     if (openable) {
@@ -429,6 +519,18 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
         if (doc.cells.length === 0) {
           alert('No runnable code cells found in that notebook.');
           return;
+        }
+        const title = file.name.replace(/\.ipynb$/i, '');
+        // Personal upload → ask where to keep it so it survives a reload.
+        const pref = await askStoragePreference('notebook');
+        if (pref === 'web' && isConnected()) {
+          await savePersonalNotebook({ title, cells: doc.cells }).catch(() => null);
+        } else if (pref === 'local') {
+          await localPut('notebooks', {
+            id: `local-${Date.now()}`,
+            title,
+            cells: doc.cells
+          }).catch(() => null);
         }
         app.doc = doc;
         app.explainAllowed = true;
@@ -548,19 +650,28 @@ export function openCourseModal(
       body.appendChild(err);
       const go = button('Join course', 'primary');
       go.style.width = '100%';
-      const submit = (): void => {
-        const res = joinByCode(f.input.value);
-        if (!res) {
+      const submit = async (): Promise<void> => {
+        if (f.input.value.trim().length < 4) {
           err.textContent = 'Enter a valid invite code (at least 4 characters).';
+          return;
+        }
+        go.disabled = true;
+        go.textContent = 'Joining…';
+        err.textContent = '';
+        const res = await joinCourse(f.input.value);
+        if (!res) {
+          err.textContent = 'No course found with that invite code.';
+          go.disabled = false;
+          go.textContent = 'Join course';
           return;
         }
         dispose();
         celebrate(`Joined ${res.data.subject}`);
         app.navigate('home');
       };
-      go.addEventListener('click', submit);
+      go.addEventListener('click', () => void submit());
       f.input.addEventListener('keydown', e => {
-        if (e.key === 'Enter') submit();
+        if (e.key === 'Enter') void submit();
       });
       body.appendChild(go);
       setTimeout(() => f.input.focus(), 50);
@@ -575,20 +686,22 @@ export function openCourseModal(
       body.appendChild(err);
       const go = button('Create course', 'primary');
       go.style.width = '100%';
-      const submit = (): void => {
+      const submit = async (): Promise<void> => {
         const name = f.input.value.trim();
         if (name.length < 3) {
           err.textContent = 'Give the course a name (at least 3 characters).';
           return;
         }
-        const res = createCourse(name);
+        go.disabled = true;
+        go.textContent = 'Creating…';
+        const res = await createOwnCourse(name);
         dispose();
         celebrate(`Created ${res.data.subject}`);
         app.navigate('home');
       };
-      go.addEventListener('click', submit);
+      go.addEventListener('click', () => void submit());
       f.input.addEventListener('keydown', e => {
-        if (e.key === 'Enter') submit();
+        if (e.key === 'Enter') void submit();
       });
       body.appendChild(go);
       setTimeout(() => f.input.focus(), 50);

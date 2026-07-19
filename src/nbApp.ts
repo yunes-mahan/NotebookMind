@@ -13,7 +13,11 @@ import {
   allCourses,
   setActiveCourse,
   leaveCourse,
-  deleteCourse
+  deleteCourse,
+  loadCoursesFromDB,
+  loadProgressFromDB,
+  resetToDemoOnly,
+  resetProgress
 } from './courseStore';
 import { LoginWidget } from './auth';
 import { openProfileModal } from './profileModal';
@@ -706,25 +710,32 @@ export class NotebookMindApp extends Widget {
 
   /** Sign out (optionally wiping all local progress) and show the login overlay. */
   private _signOut(wipe: boolean): void {
+    // Always clear per-user session state so the next account never inherits the
+    // previous user's XP / completion / solved counters. loadProgressFromDB then
+    // re-seeds the real totals for whoever signs in next.
+    pointsEngine.reset();
+    resetProgress();
+    this.notebooksCompleted = 0;
+    this.cellsAttempted = 0;
+    this.cellsFirstTry = 0;
+    this.xp.reset();
     if (wipe) {
-      pointsEngine.reset();
-      this.notebooksCompleted = 0;
-      this.cellsAttempted = 0;
-      this.cellsFirstTry = 0;
-      this.xp.reset();
       invited.length = 0;
       MATES.forEach(m => {
         m.me = false;
       });
     }
     clearUser();
+    resetToDemoOnly(); // don't carry this user's DB courses into the next session
     this.doc = null;
     this.navigate('home');
     const login = new LoginWidget(() => {
       login.node.remove();
       this._paintAccount();
       this._paintTeachSection();
-      this.navigate('home');
+      void Promise.all([loadCoursesFromDB(), loadProgressFromDB()]).finally(() =>
+        this.navigate('home')
+      );
       this.maybeOnboard();
     });
     const shellNode =

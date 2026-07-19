@@ -5,6 +5,10 @@ import { renderMarkdown } from './markdown';
 import { openSlides, renderSlide } from './slidesModal';
 import { deckForPdf } from './slidesData';
 import { demoCellMeta, demoCellSlides, cellTitle } from './demoData';
+import { activeBackendCourseId } from './courseStore';
+import { profile } from './friendsData';
+import { isConnected } from './supabase';
+import { getCellComments, addCellComment, ICellComment } from './supabaseDB';
 
 interface ICellResult {
   output: string;
@@ -16,8 +20,7 @@ type DetailTab = 'ai' | 'teacher' | 'student';
 const CAPS =
   'font-size:11px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600';
 
-// Session-scoped stores (persist while JupyterLab stays open).
-const studentNotesStore = new Map<string, string>();
+// Session-scoped store for the free-floating margin notes (personal scratch).
 const sideNotesStore = new Map<string, string[]>();
 
 /**
@@ -38,6 +41,21 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   const explanationCache = new Map<number, string>();
   const chatHistory = new Map<number, IChatTurn[]>();
   const tabState = new Map<number, DetailTab>();
+  // Real cell comments (teacher notes + student comments) fetched from Supabase,
+  // cached per cell so switching tabs doesn't refetch.
+  const commentsCache = new Map<number, ICellComment[]>();
+  const courseId = activeBackendCourseId();
+
+  async function loadComments(i: number, force = false): Promise<ICellComment[]> {
+    if (!force && commentsCache.has(i)) {
+      return commentsCache.get(i) as ICellComment[];
+    }
+    const rows = isConnected()
+      ? await getCellComments(courseId, docKey, i).catch(() => [])
+      : [];
+    commentsCache.set(i, rows);
+    return rows;
+  }
 
   const stage = document.createElement('div');
   host.appendChild(stage);
@@ -277,113 +295,181 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
     body.appendChild(buildChat(i));
   }
 
-  // ── Teacher tab ───────────────────────────────────────────────
+  // ── Teacher tab (real teacher notes from the DB) ──────────────
   function renderTeacherTab(body: HTMLElement, i: number): void {
-    const meta = demoCellMeta(docKey, i);
-    if (meta?.teacher) {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:10px;align-items:flex-start';
-      row.appendChild(avatar('Teacher', 22));
-      const col = document.createElement('div');
-      col.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
-      const name = document.createElement('span');
-      name.style.cssText =
-        'font-size:12px;font-weight:600;color:var(--text-primary)';
-      name.textContent = 'Your teacher';
-      const text = document.createElement('div');
-      text.style.cssText =
-        'font-size:13px;line-height:1.65;color:var(--text-secondary)';
-      text.appendChild(renderMarkdown(meta.teacher));
-      col.appendChild(name);
-      col.appendChild(text);
-      row.appendChild(col);
-      body.appendChild(row);
-    } else {
-      const empty = document.createElement('div');
-      empty.style.cssText =
-        'display:flex;flex-direction:column;align-items:center;gap:8px;padding:18px;text-align:center';
-      empty.innerHTML =
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>' +
-        '<span style="font-size:12.5px;color:var(--text-tertiary)">No teacher note for this cell yet.</span>';
-      const req = button('Request a note', 'secondary');
-      req.style.height = 'var(--control-sm)';
-      req.style.fontSize = '12px';
-      const confirm = document.createElement('span');
-      confirm.style.cssText =
-        'font-size:12px;color:var(--accent-text);display:none';
-      req.addEventListener('click', () => {
-        document.dispatchEvent(
-          new CustomEvent('notebookmind:material-request', {
-            detail: { docKey, cellIndex: i, type: 'missing_info' }
-          })
+    const isTeacher = profile.role === 'teacher';
+    body.appendChild(spinner('Loading teacher notes…'));
+
+    void loadComments(i).then(rows => {
+      if ((tabState.get(i) ?? 'ai') !== 'teacher') {
+        return;
+      }
+      body.innerHTML = '';
+      const notes = rows.filter(r => r.role === 'teacher');
+      // Fall back to the seeded demo note only when there's nothing real yet.
+      const demoTeacher = notes.length === 0 ? demoCellMeta(docKey, i)?.teacher : '';
+
+      if (notes.length === 0 && !demoTeacher && !isTeacher) {
+        renderTeacherEmpty(body, i);
+      }
+      notes.forEach(n =>
+        body.appendChild(commentRow(n.author_name || 'Your teacher', n.body))
+      );
+      if (demoTeacher) {
+        body.appendChild(commentRow('Your teacher', demoTeacher));
+      }
+      // Teachers can post a note directly against this cell.
+      if (isTeacher) {
+        body.appendChild(
+          composer(body, i, 'teacher', 'Write a note for your students…', 'Post note')
         );
-        confirm.textContent =
-          'Flagged — the teacher will see that this cell needs more material.';
-        confirm.style.display = '';
-      });
-      empty.appendChild(req);
-      empty.appendChild(confirm);
-      body.appendChild(empty);
-    }
+      }
+    });
   }
 
-  // ── Students tab ──────────────────────────────────────────────
-  function renderStudentTab(body: HTMLElement, i: number): void {
-    const meta = demoCellMeta(docKey, i);
-    const comments = meta?.students ?? [];
-    if (comments.length === 0) {
-      const none = document.createElement('span');
-      none.style.cssText =
-        'font-size:12.5px;color:var(--text-tertiary);text-align:center;padding:8px';
-      none.textContent =
-        'No classmate comments on this cell yet — yours could be the first.';
-      body.appendChild(none);
-    }
-    comments.forEach(c => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:10px;align-items:flex-start';
-      row.appendChild(avatar(c.author, 22));
-      const col = document.createElement('div');
-      col.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
-      col.innerHTML =
-        `<span style="font-size:12px;font-weight:600;color:var(--text-primary)">${c.author}</span>` +
-        `<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-secondary)">${c.text}</p>`;
-      row.appendChild(col);
-      body.appendChild(row);
+  function renderTeacherEmpty(body: HTMLElement, i: number): void {
+    const empty = document.createElement('div');
+    empty.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;gap:8px;padding:18px;text-align:center';
+    empty.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-quaternary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>' +
+      '<span style="font-size:12.5px;color:var(--text-tertiary)">No teacher note for this cell yet.</span>';
+    const req = button('Request a note', 'secondary');
+    req.style.height = 'var(--control-sm)';
+    req.style.fontSize = '12px';
+    const confirm = document.createElement('span');
+    confirm.style.cssText = 'font-size:12px;color:var(--accent-text);display:none';
+    req.addEventListener('click', () => {
+      document.dispatchEvent(
+        new CustomEvent('notebookmind:material-request', {
+          detail: { docKey, cellIndex: i, type: 'missing_info' }
+        })
+      );
+      confirm.textContent =
+        'Flagged — the teacher will see that this cell needs more material.';
+      confirm.style.display = '';
     });
+    empty.appendChild(req);
+    empty.appendChild(confirm);
+    body.appendChild(empty);
+  }
 
-    const noteWrap = document.createElement('div');
-    noteWrap.style.cssText =
+  /** A single comment/note row (avatar + name + body). */
+  function commentRow(author: string, bodyText: string): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:10px;align-items:flex-start';
+    row.appendChild(avatar(author, 22));
+    const col = document.createElement('div');
+    col.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
+    const name = document.createElement('span');
+    name.style.cssText = 'font-size:12px;font-weight:600;color:var(--text-primary)';
+    name.textContent = author;
+    const text = document.createElement('div');
+    text.style.cssText =
+      'font-size:13px;line-height:1.65;color:var(--text-secondary)';
+    text.appendChild(renderMarkdown(bodyText));
+    col.appendChild(name);
+    col.appendChild(text);
+    row.appendChild(col);
+    return row;
+  }
+
+  /** Shared composer that posts a comment to the DB and appends it live. */
+  function composer(
+    bodyEl: HTMLElement,
+    i: number,
+    role: 'teacher' | 'student',
+    placeholder: string,
+    btnLabel: string
+  ): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
       'display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border-subtle);padding-top:12px';
     const lbl = document.createElement('span');
     lbl.style.cssText = CAPS;
-    lbl.textContent = 'Your note';
+    lbl.textContent = role === 'teacher' ? 'Add a teacher note' : 'Your comment';
     const ta = document.createElement('textarea');
     ta.rows = 2;
-    ta.value = studentNotesStore.get(noteKey(i)) ?? '';
-    ta.placeholder = 'Share what helped you understand this cell…';
+    ta.placeholder = placeholder;
     ta.style.cssText =
-      'width:100%;box-sizing:border-box;resize:vertical;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:9px 12px;font-family:var(--font-sans);font-size:13px;line-height:1.5;outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)';
-    ta.addEventListener('focus', () => {
-      ta.style.borderColor = 'var(--accent)';
-      ta.style.boxShadow = '0 0 0 3px var(--brand-glow)';
-    });
-    ta.addEventListener('blur', () => {
-      ta.style.borderColor = 'var(--border-strong)';
-      ta.style.boxShadow = 'none';
-    });
-    // Auto-saves like the prototype.
-    ta.addEventListener('input', () => {
-      const v = ta.value.trim();
-      if (v) {
-        studentNotesStore.set(noteKey(i), v);
+      'width:100%;box-sizing:border-box;resize:vertical;background:var(--bg-base);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:7px;padding:9px 12px;font-family:var(--font-sans);font-size:13px;line-height:1.5;outline:none';
+    const rowBtn = document.createElement('div');
+    rowBtn.style.cssText =
+      'display:flex;align-items:center;gap:10px;justify-content:flex-end';
+    const status = document.createElement('span');
+    status.style.cssText = 'font-size:12px;color:var(--text-quaternary);margin-right:auto';
+    if (!isConnected() || !courseId) {
+      status.textContent = 'Sign in to a course to post — not saved offline.';
+    }
+    const post = button(btnLabel, 'secondary');
+    post.style.height = 'var(--control-sm)';
+    post.style.fontSize = '12px';
+    post.addEventListener('click', async () => {
+      const text = ta.value.trim();
+      if (!text) {
+        return;
+      }
+      if (!isConnected() || !courseId) {
+        status.textContent = 'No backend connected — comment not saved.';
+        return;
+      }
+      post.disabled = true;
+      const saved = await addCellComment({
+        courseId,
+        notebookKey: docKey,
+        cellIndex: i,
+        role,
+        authorName: profile.name,
+        body: text
+      }).catch(() => null);
+      post.disabled = false;
+      if (saved) {
+        commentsCache.set(i, [...(commentsCache.get(i) ?? []), saved]);
+        ta.value = '';
+        status.textContent = 'Posted ✓';
+        renderTab(bodyEl, i); // refresh the tab so the new comment shows
       } else {
-        studentNotesStore.delete(noteKey(i));
+        status.textContent = 'Could not post — try again.';
       }
     });
-    noteWrap.appendChild(lbl);
-    noteWrap.appendChild(ta);
-    body.appendChild(noteWrap);
+    rowBtn.appendChild(status);
+    rowBtn.appendChild(post);
+    wrap.appendChild(lbl);
+    wrap.appendChild(ta);
+    wrap.appendChild(rowBtn);
+    return wrap;
+  }
+
+  // ── Students tab (real classmate comments from the DB) ────────
+  function renderStudentTab(body: HTMLElement, i: number): void {
+    body.appendChild(spinner('Loading comments…'));
+
+    void loadComments(i).then(rows => {
+      if ((tabState.get(i) ?? 'ai') !== 'student') {
+        return;
+      }
+      body.innerHTML = '';
+      const comments = rows.filter(r => r.role === 'student');
+      // Seeded demo classmates only as a fallback when there's nothing real.
+      const demo = comments.length === 0 ? demoCellMeta(docKey, i)?.students ?? [] : [];
+
+      if (comments.length === 0 && demo.length === 0) {
+        const none = document.createElement('span');
+        none.style.cssText =
+          'font-size:12.5px;color:var(--text-tertiary);text-align:center;padding:8px';
+        none.textContent =
+          'No classmate comments on this cell yet — yours could be the first.';
+        body.appendChild(none);
+      }
+      comments.forEach(c =>
+        body.appendChild(commentRow(c.author_name || 'Classmate', c.body))
+      );
+      demo.forEach(c => body.appendChild(commentRow(c.author, c.text)));
+
+      body.appendChild(
+        composer(body, i, 'student', 'Share what helped you understand this cell…', 'Post comment')
+      );
+    });
   }
 
   // ── Matching slide (prototype box) ────────────────────────────

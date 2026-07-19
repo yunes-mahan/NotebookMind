@@ -1,6 +1,6 @@
 import type { NotebookMindApp } from './nbApp';
 import { profile } from './friendsData';
-import { joinByCode, createCourse } from './courseStore';
+import { joinCourse, createOwnCourse } from './courseStore';
 import { button, celebrate } from './uiKit';
 
 /**
@@ -76,21 +76,32 @@ export function openOnboarding(app: NotebookMindApp): void {
 
   const primary = button(isTeacher ? 'Create course' : 'Join course', 'primary');
   primary.style.width = '100%';
-  const submit = (): void => {
+  const submit = async (): Promise<void> => {
     const v = input.value.trim();
     if (isTeacher) {
       if (v.length < 3) {
         err.textContent = 'Give the course a name (at least 3 characters).';
         return;
       }
-      const res = createCourse(v);
+      primary.disabled = true;
+      primary.textContent = 'Creating…';
+      const res = await createOwnCourse(v);
       finish();
       celebrate(`Created ${res.data.subject}`);
       app.navigate('home');
     } else {
-      const res = joinByCode(v);
-      if (!res) {
+      if (v.length < 4) {
         err.textContent = 'Enter a valid invite code (at least 4 characters).';
+        return;
+      }
+      primary.disabled = true;
+      primary.textContent = 'Joining…';
+      err.textContent = '';
+      const res = await joinCourse(v);
+      if (!res) {
+        err.textContent = 'No course found with that invite code.';
+        primary.disabled = false;
+        primary.textContent = 'Join course';
         return;
       }
       finish();
@@ -98,10 +109,10 @@ export function openOnboarding(app: NotebookMindApp): void {
       app.navigate('home');
     }
   };
-  primary.addEventListener('click', submit);
+  primary.addEventListener('click', () => void submit());
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
-      submit();
+      void submit();
     }
   });
   card.appendChild(primary);

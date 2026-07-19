@@ -7,6 +7,14 @@ import { XP_BY_DIFFICULTY } from './xp';
 import { pointsEngine } from './points';
 import { makeCodeField } from './codeField';
 import { demoChallenge } from './demoData';
+import {
+  recordCellAttempt,
+  saveNotebookSubmission,
+  getNotebookChallenges,
+  saveNotebookChallenge
+} from './supabaseDB';
+import { isConnected } from './supabase';
+import { activeBackendCourseId, markNotebookDone, addLocalStats } from './courseStore';
 import { button, infoBox, spinner, maxWidth, celebrate } from './uiKit';
 
 // Rotate types so a notebook genuinely uses all the styles.
@@ -44,10 +52,14 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
 
   const cells = doc.cells;
   const docKey = doc.key;
+  const docName = doc.name;
   let activeIndex = 0;
   let canonicalIndex = 0;
   let completedCount = 0;
   let kernelAvailable = false;
+  // Per-notebook telemetry (written to Supabase for the teacher dashboard).
+  let nbXpEarned = 0;
+  let nbFirstTry = 0;
 
   // ── Progress row + bar (prototype) ────────────────────────────
   const progressRow = document.createElement('div');
@@ -199,6 +211,10 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
           app.difficultyBias
         ));
       app.challenges[i] = ch;
+      // Cache it so a reload reuses this task instead of regenerating with AI.
+      if (isConnected()) {
+        void saveNotebookChallenge(docKey, i, ch).catch(() => null);
+      }
     }
 
     step.title.textContent = `Step ${i + 1} · ${TYPE_LABEL[ch.type]}`;
@@ -301,8 +317,26 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
     app.recordCell(awarded && firstTry);
     app.xp.recordAttempt(awarded && firstTry);
 
+    // Anonymous per-cell telemetry → powers the teacher "struggle" analytics.
+    // "succeeded" means solved on the first try (no hints/reveal), so the class
+    // success-rate per cell is exactly its first-try rate.
+    const courseId = activeBackendCourseId();
+    if (courseId) {
+      void recordCellAttempt(
+        docKey,
+        activeIndex,
+        awarded && firstTry,
+        firstTry ? 1 : 2,
+        courseId
+      ).catch(() => null);
+    }
+    if (awarded && firstTry) {
+      nbFirstTry += 1;
+    }
+
     if (awarded) {
       const xp = app.xp.award(ch.difficulty);
+      nbXpEarned += xp;
       pointsEngine.addPoints(xp, `learn-${ch.type}`);
       celebrate(`+${xp} XP${firstTry ? ' · first try!' : ' · solved'}`);
       if (origin) {
@@ -336,6 +370,24 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
       await activate(solvedIndex + 1);
     } else {
       app.recordNotebookComplete();
+      // Mark this notebook done for the signed-in user so the home progress card
+      // reflects real completion (not the seed) as soon as they finish.
+      markNotebookDone(docKey);
+      // Fold this run into the persisted learning totals so the home "Solved" /
+      // "First try" tiles stay correct without waiting for a reload.
+      addLocalStats(cells.length, nbFirstTry);
+      // Record the completed run for the teacher dashboard (demo course only).
+      const courseId = activeBackendCourseId();
+      if (courseId) {
+        void saveNotebookSubmission({
+          notebookKey: docKey,
+          notebookTitle: docName ?? docKey,
+          xpEarned: nbXpEarned,
+          cellsAttempted: cells.length,
+          cellsFirstTry: nbFirstTry,
+          courseId
+        }).catch(() => null);
+      }
       app.navigate('complete');
     }
   }
@@ -603,6 +655,17 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
       );
       warn.style.marginBottom = '16px';
       root.insertBefore(warn, progressRow);
+    }
+
+    // Reuse previously generated challenges for this notebook (no AI re-run).
+    if (isConnected()) {
+      const saved = await getNotebookChallenges(docKey).catch(() => ({}));
+      Object.entries(saved).forEach(([k, payload]) => {
+        const i = Number(k);
+        if (i >= 0 && i < cells.length && !app.challenges[i]) {
+          app.challenges[i] = payload as IChallenge;
+        }
+      });
     }
 
     await activate(0);
