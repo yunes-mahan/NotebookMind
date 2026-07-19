@@ -9,6 +9,12 @@ export interface ISlideStep {
   text: string;
 }
 
+export interface ISlideCard {
+  value: string;
+  title?: string;
+  text: string;
+}
+
 export interface ISlide {
   kind:
     | 'title'
@@ -19,7 +25,8 @@ export interface ISlide {
     | 'steps'
     | 'stat'
     | 'compare'
-    | 'exercise';
+    | 'exercise'
+    | 'cards';
   eyebrow?: string;
   title?: string;
   titleHi?: string; // a word inside the title to highlight
@@ -31,6 +38,7 @@ export interface ISlide {
   code?: string; // multi-line code block
   codeCaption?: string;
   steps?: ISlideStep[]; // numbered cards (2–4)
+  cards?: ISlideCard[]; // value + description cards (2–3)
   stat?: { value: string; label: string };
   compare?: {
     avoid: { title: string; text: string };
@@ -44,174 +52,163 @@ export interface IDeck {
   slides: ISlide[];
 }
 
-// ── Coffee & Climate — a real, cohesive data-analysis deck ────────────
-// Mapped across the demo course's three weeks.
+// ── Principal Component Analysis in Jupyter (Wine dataset) ────────────
+// A cohesive, from-first-principles deck, split across the demo course's
+// three weeks: motivation & maths → the algorithm → results & projection.
 
 const DECKS: Record<string, IDeck> = {
-  // Week 1 — Foundations & setup
+  // Week 1 — Motivation & the mathematics
   'materials/lecture_w1.pdf': {
-    title: 'Coffee & Climate — Getting started',
+    title: 'PCA — Motivation & mathematics',
     slides: [
       {
         kind: 'title',
-        eyebrow: 'Jupyter Notebook Data Analysis Course',
-        title: 'Coffee & Climate',
+        eyebrow: 'Dimensionality reduction from first principles',
+        title: 'Principal Component Analysis in Jupyter',
         subtitle:
-          'Reading, cleaning, and visualizing real-world data in Jupyter — a hands-on module exploring a global coffee-production dataset alongside regional climate trends.',
-        tags: ['pandas', 'matplotlib', 'NumPy', 'Jupyter'],
-        presenter: 'Module 04 · Applied Data Science'
+          'Derive the variance-maximizing objective, reduce it to an eigenproblem, and implement every step on a real 13-dimensional dataset.',
+        tags: ['NumPy', 'scikit-learn', 'Jupyter'],
+        presenter: 'Notebook Methods · Computer Science'
       },
       {
-        kind: 'overview',
-        eyebrow: 'Course overview',
-        title: 'Why coffee, and why now?',
+        kind: 'cards',
+        eyebrow: 'Motivation',
+        title: 'The curse of high dimensionality',
         subtitle:
-          'Coffee is grown in over 70 countries, almost all within the “Bean Belt.” Its yields are exquisitely sensitive to temperature and rainfall — an ideal, real-world case study for time-series analysis, messy joins, and geographic visualization.',
-        stat: {
-          value: '70+',
-          label: 'countries supply the global coffee market we’ll analyze'
-        },
-        steps: [
-          { n: '01', title: 'Ingest', text: 'Load CSVs and API pulls into pandas DataFrames.' },
-          { n: '02', title: 'Clean', text: 'Handle missing values, outliers, and unit mismatches.' },
-          { n: '03', title: 'Explore', text: 'Uncover trends across decades and regions.' },
-          { n: '04', title: 'Visualize', text: 'Build publication-ready charts with matplotlib.' }
+          'Real feature spaces are wide. As dimension grows, data becomes sparse, pairwise distances concentrate, and direct visualization is impossible. We need a projection that keeps what matters.',
+        cards: [
+          {
+            value: '13→2',
+            title: 'Plot the unplottable',
+            text: 'Compress 13 wine features into two coordinates we can actually plot.'
+          },
+          {
+            value: 'd²',
+            title: 'Structure hides in correlations',
+            text: 'A covariance matrix grows quadratically — structure hides in correlations between features.'
+          },
+          {
+            value: 'min L',
+            title: 'Less noise, less overfit',
+            text: 'A faithful low-rank view reduces noise and overfitting for downstream models.'
+          }
         ]
       },
       {
         kind: 'code',
-        eyebrow: 'Lesson 1',
-        title: 'Setting up your notebook',
+        eyebrow: 'The mathematics',
+        title: 'The PCA objective',
         subtitle:
-          'Every analysis starts with the same three imports. We also set a plotting style so every chart in the course looks consistent.',
-        bullets: [
-          'Run once per kernel session — imports are cached after that',
-          'pandas ≥ 2.0 required for the .convert_dtypes() calls we’ll use',
-          '%matplotlib inline keeps charts embedded in the notebook'
-        ],
-        codeCaption: 'In [1]:',
+          'Find the unit direction w along which the projected data has maximal variance. Enforcing ‖w‖ = 1 with a Lagrange multiplier and differentiating turns this into an eigenproblem.',
+        codeCaption: 'Objective → eigenproblem',
         code:
-          "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\nplt.style.use('seaborn-v0_8-whitegrid')\n%matplotlib inline\n\ncoffee = pd.read_csv(\n    'data/coffee_production.csv',\n    parse_dates=['year'],\n)\ncoffee.head()"
+          'w* = argmax  wᵀ Σ w        subject to  ‖w‖ = 1\n\nΣ w = λ w',
+        text:
+          'Σ is the d×d covariance matrix of the centered data; its eigenvectors are the principal components (orthogonal axes) and each eigenvalue λ is the variance captured by that axis. Equivalently, PCA minimizes squared reconstruction error — the same eigenvectors, viewed as the best low-rank approximation.'
       }
     ]
   },
 
-  // Week 2 — Cleaning & exploration
+  // Week 2 — The algorithm, step by step
   'materials/lecture_w2.pdf': {
-    title: 'Coffee & Climate — Cleaning & exploration',
+    title: 'PCA — The algorithm, step by step',
     slides: [
       {
         kind: 'steps',
-        eyebrow: 'Lesson 2',
-        title: 'From raw export to analysis-ready',
+        eyebrow: 'The recipe',
+        title: 'The algorithm in four steps',
         subtitle:
-          'Our raw file arrives with inconsistent country names, mixed units, and gaps for war- and drought-affected years. We resolve these in four passes.',
+          'PCA is four linear-algebra moves: put features on equal footing, measure how they co-vary, find the axes of that co-variation, and project onto the strongest ones.',
         steps: [
           {
             n: '01',
-            title: 'Standardize names',
-            code: "df['country'].replace(alias_map)",
-            text: 'Merge duplicate spellings like “Cote d’Ivoire” and “Ivory Coast.”'
+            title: 'Standardize',
+            code: 'Z = (X − μ) / σ',
+            text: 'Zero-mean, unit-variance features so scale doesn’t distort variance.'
           },
           {
             n: '02',
-            title: 'Fix units',
-            code: 'convert lbs → 60kg bags',
-            text: 'Older records report pounds; newer ones use 60kg bags.'
+            title: 'Covariance',
+            code: 'Σ = ZᵀZ / (n−1)',
+            text: 'The d×d matrix of feature co-variation — PCA’s central object.'
           },
           {
             n: '03',
-            title: 'Handle gaps',
-            code: 'interpolate() short gaps only',
-            text: 'Only fill gaps ≤ 2 years; longer gaps stay NaN.'
+            title: 'Eigendecompose',
+            code: 'Σ = W Λ Wᵀ',
+            text: 'Eigenvectors sorted by eigenvalue give the ordered principal axes.'
           },
           {
             n: '04',
-            title: 'Validate',
-            code: 'assert no negative yields',
-            text: 'Guard against silent unit-conversion errors before analysis.'
+            title: 'Project',
+            code: 'Y = Z Wₖ',
+            text: 'Map onto the top-k eigenvectors to get a k-dim embedding.'
           }
         ]
       },
       {
-        kind: 'stat',
-        eyebrow: 'Lesson 3 · Exploration',
-        title: 'Global production, 1990–2024',
-        codeCaption: 'Notebook snippet',
-        code: "df.groupby('year')['bags_60kg'].sum().plot()\nplt.xlabel('Year')\nplt.ylabel('Bags (millions)')\nplt.title('Global Coffee Output')",
-        stat: {
-          value: '+84%',
-          label:
-            'growth in global output over 34 seasons — but not evenly distributed across regions, as the next slide shows.'
-        }
+        kind: 'code',
+        eyebrow: 'Notebook · Step 1',
+        title: 'Loading and inspecting the data',
+        subtitle:
+          'The Wine dataset: 178 samples, 13 chemical features, 3 cultivars.',
+        codeCaption: 'In [1]:',
+        code:
+          'import numpy as np\nfrom sklearn.datasets import load_wine\n\ndata = load_wine()\nX, y = data.data, data.target\nprint(X.shape, np.unique(y))\n# → (178, 13) [0 1 2]',
+        text:
+          'Features span very different scales — from proline in the hundreds to hue near 1. That difference is exactly why standardization comes first.'
       },
       {
         kind: 'code',
-        eyebrow: 'Lesson 3 · Exploration',
-        title: 'Regional yield vs. rainfall anomaly',
+        eyebrow: 'Notebook · Step 2',
+        title: 'Standardizing and the covariance matrix',
         subtitle:
-          'Joining our production table with a climate dataset reveals which regions are most exposed to rainfall swings.',
-        codeCaption: 'Notebook snippet',
-        code: "merged = coffee.merge(\n    climate,\n    on=['country', 'year'],\n)\nmerged.corr()['yield']",
+          'On standardized data, Σ equals the correlation matrix — diagonal entries are all 1.',
+        codeCaption: 'In [2]:',
+        code:
+          '# standardize: zero mean, unit variance\nZ = (X - X.mean(0)) / X.std(0)\n\n# covariance, features in columns\nS = np.cov(Z, rowvar=False)\nprint(S.shape)   # → (13, 13)',
         text:
-          'Colombia’s steep rainfall deficit lines up with its lower relative yield — a candidate for a follow-up regression in Lesson 4.'
+          'The n−1 divisor gives the unbiased estimate; rowvar=False keeps features in columns.'
       }
     ]
   },
 
-  // Week 3 — Visualisation & the exercise
+  // Week 3 — Results & projection
   'materials/lecture_w3.pdf': {
-    title: 'Coffee & Climate — Charting & practice',
+    title: 'PCA — Results & projection',
     slides: [
       {
-        kind: 'compare',
-        eyebrow: 'Lesson 4',
-        title: 'Charting that earns trust',
-        subtitle:
-          'The same data, plotted two ways. Small choices in axis scale and color change what a reader concludes.',
-        compare: {
-          avoid: {
-            title: 'Truncated y-axis',
-            text: 'Axis starts at 55 — a 5% gap looks like a landslide.'
-          },
-          prefer: {
-            title: 'Zero-based y-axis',
-            text: 'plt.ylim(0, max_val * 1.1) makes true proportions visible.'
-          }
+        kind: 'stat',
+        eyebrow: 'Notebook · Step 3',
+        title: 'Eigendecomposition and explained variance',
+        codeCaption: 'In [3]:',
+        code:
+          '# symmetric → use eigh (real, orthonormal)\nvals, vecs = np.linalg.eigh(S)\norder = vals.argsort()[::-1]\nvals, vecs = vals[order], vecs[:, order]\n\nevr = vals / vals.sum()\nprint(evr[:3].round(3))   # → [0.362 0.192 0.111]',
+        stat: {
+          value: '55%',
+          label:
+            'of total variance captured by the first two components (PC1 36% + PC2 19%) — the rest tapers off quickly.'
         }
       },
       {
-        kind: 'statement',
-        eyebrow: 'Lesson 4',
-        title: 'Read the axes before the trend',
-        titleHi: 'axes',
+        kind: 'code',
+        eyebrow: 'Notebook · Step 4',
+        title: 'Projecting onto principal components',
+        subtitle:
+          'Multiply the standardized data by the top-2 eigenvectors and scatter the result.',
+        codeCaption: 'In [4]:',
+        code:
+          '# project onto the top-2 eigenvectors\nY = Z @ vecs[:, :2]\n\nimport matplotlib.pyplot as plt\nplt.scatter(Y[:, 0], Y[:, 1], c=y)\nplt.xlabel("PC1"); plt.ylabel("PC2")\n# Y.shape → (178, 2)',
         text:
-          'A chart is an argument. Always label both axes, start counts at zero, and let colour encode meaning — never decoration.'
+          'Three cultivars separate cleanly in 2D — although PCA never used the labels y. The unsupervised axes alone recover the structure.'
       },
       {
-        kind: 'exercise',
-        eyebrow: 'Your turn',
-        title: 'Exercise: predict next season’s yield',
-        subtitle:
-          'Using the cleaned coffee_climate.csv from Lesson 2, build a notebook that answers three questions before next week’s session.',
-        steps: [
-          {
-            n: '01',
-            title: 'Correlate',
-            text: 'Compute Pearson r between rainfall anomaly and yield for each country.'
-          },
-          {
-            n: '02',
-            title: 'Segment',
-            text: 'Group countries into high / medium / low climate sensitivity.'
-          },
-          {
-            n: '03',
-            title: 'Report',
-            text: 'Summarize findings in 3 markdown cells with supporting charts.'
-          }
-        ],
-        footer: 'Due before next session · Submit as a rendered .ipynb via the course portal'
+        kind: 'statement',
+        eyebrow: 'Takeaway',
+        title: 'PCA finds structure without labels',
+        titleHi: 'without labels',
+        text:
+          'Standardize, take the covariance, eigendecompose, project. Two orthogonal axes recovered 55% of the variance and separated three cultivars — a compact, faithful view of a 13-dimensional space.'
       }
     ]
   }
@@ -231,6 +228,9 @@ export function slideProse(slide: ISlide): string {
   if (slide.bullets?.length) parts.push(slide.bullets.join('. ') + '.');
   if (slide.steps?.length) {
     slide.steps.forEach(s => parts.push(`${s.title}: ${s.text}`));
+  }
+  if (slide.cards?.length) {
+    slide.cards.forEach(c => parts.push(`${c.title ? c.title + ': ' : ''}${c.text}`));
   }
   if (slide.compare) {
     parts.push(`Avoid — ${slide.compare.avoid.title}: ${slide.compare.avoid.text}`);

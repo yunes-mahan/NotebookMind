@@ -289,9 +289,7 @@ export class NotebookMindApp extends Widget {
     brand.style.cssText =
       'display:flex;align-items:center;gap:8px;padding:16px 16px 14px';
     brand.innerHTML =
-      '<div style="width:22px;height:22px;border-radius:6px;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 6px var(--brand-glow)">' +
-      logoSvg(12) +
-      '</div>' +
+      `<span style="display:inline-flex;flex:0 0 auto">${logoSvg(24, 'var(--accent)')}</span>` +
       '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">NotebookMind</span>';
     bar.appendChild(brand);
 

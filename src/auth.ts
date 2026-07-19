@@ -63,9 +63,7 @@ export class LoginWidget extends Widget {
     logoRow.style.cssText =
       'display:flex;flex-direction:column;gap:6px;align-items:center;text-align:center;margin-bottom:18px';
     logoRow.innerHTML = `
-      <div style="width:34px;height:34px;border-radius:9px;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px var(--brand-glow)">
-        ${logoSvg(18)}
-      </div>
+      <span style="display:inline-flex">${logoSvg(40, 'var(--accent)')}</span>
       <span style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)">NotebookMind</span>
       <span style="font-size:12.5px;color:var(--text-tertiary)">Learn your course notebooks, cell by cell.</span>
     `;

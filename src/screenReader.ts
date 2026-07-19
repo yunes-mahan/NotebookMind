@@ -831,6 +831,27 @@ function renderDeckSlide(s: ISlide): HTMLElement {
       card.appendChild(grid);
       break;
     }
+    case 'cards': {
+      card.appendChild(titleEl());
+      if (s.subtitle) card.appendChild(subEl());
+      const n = s.cards?.length ?? 1;
+      const grid = document.createElement('div');
+      grid.style.cssText = `display:grid;grid-template-columns:repeat(${Math.min(n, 3)},1fr);gap:12px;margin-top:4px`;
+      (s.cards ?? []).forEach(c => {
+        const d = document.createElement('div');
+        d.style.cssText =
+          'background:var(--bg-panel);border:1px solid var(--border-default);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:8px';
+        d.innerHTML =
+          `<span style="font-family:var(--font-mono);font-size:24px;font-weight:700;color:var(--accent-text);letter-spacing:-0.01em;line-height:1">${c.value}</span>` +
+          (c.title
+            ? `<span style="font-size:14px;font-weight:600;color:var(--text-primary)">${c.title}</span>`
+            : '') +
+          `<span style="font-size:12.5px;color:var(--text-tertiary);line-height:1.5">${c.text}</span>`;
+        grid.appendChild(d);
+      });
+      card.appendChild(grid);
+      break;
+    }
     case 'statement': {
       card.style.justifyContent = 'center';
       card.style.gap = '18px';

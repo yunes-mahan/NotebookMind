@@ -4,13 +4,15 @@
    every screen composes these so the whole app reads as one language.
    ───────────────────────────────────────────────────────────────────────── */
 
-/** NotebookMind brand mark (document icon, fill-based, viewBox 0 0 24 24). */
-export const NM_LOGO_PATH =
-  'm14 7v-6.54a6.977 6.977 0 0 1 2.465 1.59l3.484 3.486a6.954 6.954 0 0 1 1.591 2.464h-6.54a1 1 0 0 1 -1-1zm8 3.485v8.515a5.006 5.006 0 0 1 -5 5h-10a5.006 5.006 0 0 1 -5-5v-14a5.006 5.006 0 0 1 5-5h4.515c.163 0 .324.013.485.024v6.976a3 3 0 0 0 3 3h6.976c.011.161.024.322.024.485zm-8 8.515a1 1 0 0 0 -1-1h-5a1 1 0 0 0 0 2h5a1 1 0 0 0 1-1zm3-4a1 1 0 0 0 -1-1h-8a1 1 0 0 0 0 2h8a1 1 0 0 0 1-1z';
-
-/** Brand logo SVG markup at a given pixel size (white glyph, for accent tiles). */
-export function logoSvg(size: number, color = '#fff'): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}"><path d="${NM_LOGO_PATH}"></path></svg>`;
+/** NotebookMind brand mark — two rounded, offset parallelograms.
+ * Transparent, single-colour, scales cleanly at any size. */
+export function logoSvg(size: number, color = 'currentColor'): string {
+  return (
+    `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
+    `<rect x="0.7" y="5.7" width="15.2" height="8.6" rx="4.1" transform="rotate(-42 8.3 10)" fill="${color}"></rect>` +
+    `<rect x="12.1" y="12.9" width="9.6" height="8.6" rx="4.1" transform="rotate(-42 16.9 17.2)" fill="${color}"></rect>` +
+    `</svg>`
+  );
 }
 
 export function button(
