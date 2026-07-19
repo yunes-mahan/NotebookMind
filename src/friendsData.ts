@@ -23,30 +23,27 @@ export const MATES: IMate[] = [
 
 export const invited: Array<{ name: string; email: string }> = [];
 
-export type UserRole = 'student' | 'teacher';
-
-/** Local profile / signed-in user (demo mode — no backend). */
+/** Local profile / signed-in user (demo mode — no backend).
+ * No account-level role: anyone can join or create courses. The one admin of
+ * a course is simply whoever created it (see courseStore `isOwn`). */
 export const profile: {
   name: string;
   email: string;
   signedIn: boolean;
   avatarUrl: string;
-  role: UserRole;
   onboarded: boolean;
 } = {
   name: 'Guest',
   email: '',
   signedIn: false,
   avatarUrl: '',
-  role: 'student',
   onboarded: false
 };
 
 /** Set the signed-in user and notify the shell (sidebar account row). */
-export function setUser(name: string, email: string, role: UserRole = 'student'): void {
+export function setUser(name: string, email: string): void {
   profile.name = name;
   profile.email = email;
-  profile.role = role;
   profile.signedIn = true;
   document.dispatchEvent(new CustomEvent('notebookmind:user'));
 }
@@ -67,7 +64,6 @@ export function clearUser(): void {
   profile.email = '';
   profile.signedIn = false;
   profile.avatarUrl = '';
-  profile.role = 'student';
   profile.onboarded = false;
   document.dispatchEvent(new CustomEvent('notebookmind:user'));
 }

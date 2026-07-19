@@ -1,16 +1,15 @@
 import type { NotebookMindApp } from './nbApp';
 import { profile } from './friendsData';
-import { joinByCode, createCourse } from './courseStore';
+import { joinByCode } from './courseStore';
+import { openCourseModal } from './screenHome';
 import { button, celebrate } from './uiKit';
 
 /**
- * First-run welcome. Students are asked to join a course (invite code);
- * teachers are invited to create their first course. Either can skip and
- * explore the seeded demo course. Marks `profile.onboarded` when done.
+ * First-run welcome. Anyone can join a course with an invite code or create
+ * their own (becoming its single admin). Skipping lands on the demo course.
+ * Marks `profile.onboarded` when done.
  */
 export function openOnboarding(app: NotebookMindApp): void {
-  const isTeacher = profile.role === 'teacher';
-
   const overlay = document.createElement('div');
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:1200;background:var(--surface-overlay);display:flex;align-items:center;justify-content:center;font-family:var(--font-sans)';
@@ -26,27 +25,17 @@ export function openOnboarding(app: NotebookMindApp): void {
   card.innerHTML =
     '<div style="display:flex;flex-direction:column;gap:6px">' +
     `<span style="font-size:18px;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)">Welcome, ${firstName}!</span>` +
-    `<span style="font-size:13px;color:var(--text-tertiary);line-height:1.5">${
-      isTeacher
-        ? 'Create your first course. You’ll get an invite code to share with students, and can upload notebooks and slides.'
-        : 'Join your first course with the invite code your teacher gave you. Don’t have one? Try the demo.'
-    }</span>` +
+    '<span style="font-size:13px;color:var(--text-tertiary);line-height:1.5">Join a course with an invite code — or create your own and become its admin.</span>' +
     '</div>';
 
   const field = document.createElement('div');
   field.style.cssText = 'display:flex;flex-direction:column;gap:6px';
-  field.innerHTML = `<span style="font-size:12px;font-weight:500;color:var(--text-secondary)">${
-    isTeacher ? 'Course name' : 'Invite code'
-  }</span>`;
+  field.innerHTML =
+    '<span style="font-size:12px;font-weight:500;color:var(--text-secondary)">Invite code</span>';
   const input = document.createElement('input');
-  input.placeholder = isTeacher ? 'e.g. Statistics 101' : 'e.g. DEMO2025';
+  input.placeholder = 'e.g. DEMO2025';
   input.style.cssText =
-    `width:100%;box-sizing:border-box;height:var(--control-md);padding:0 12px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:var(--radius-control);font-size:14px;font-family:${
-      isTeacher ? 'var(--font-sans)' : 'var(--font-mono)'
-    };letter-spacing:${isTeacher ? '-0.01em' : '0.08em'};outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)`;
-  if (!isTeacher) {
-    input.style.textTransform = 'uppercase';
-  }
+    'width:100%;box-sizing:border-box;height:var(--control-md);padding:0 12px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:var(--radius-control);font-size:14px;font-family:var(--font-mono);letter-spacing:0.08em;text-transform:uppercase;outline:none;transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)';
   input.addEventListener('focus', () => {
     input.style.borderColor = 'var(--accent)';
     input.style.boxShadow = 'var(--ring)';
@@ -60,9 +49,7 @@ export function openOnboarding(app: NotebookMindApp): void {
 
   const hint = document.createElement('span');
   hint.style.cssText = 'font-size:11.5px;color:var(--text-quaternary);line-height:1.45;margin-top:-6px';
-  hint.textContent = isTeacher
-    ? 'You become the teacher and can manage weeks, notebooks and slides.'
-    : 'Ask your teacher for the code. Try DEMO2025 for the demo course.';
+  hint.textContent = 'Ask your teacher for the code. Try DEMO2025 for the demo course.';
   card.appendChild(hint);
 
   const err = document.createElement('span');
@@ -74,29 +61,17 @@ export function openOnboarding(app: NotebookMindApp): void {
     overlay.remove();
   };
 
-  const primary = button(isTeacher ? 'Create course' : 'Join course', 'primary');
+  const primary = button('Join course', 'primary');
   primary.style.width = '100%';
   const submit = (): void => {
-    const v = input.value.trim();
-    if (isTeacher) {
-      if (v.length < 3) {
-        err.textContent = 'Give the course a name (at least 3 characters).';
-        return;
-      }
-      const res = createCourse(v);
-      finish();
-      celebrate(`Created ${res.data.subject}`);
-      app.navigate('home');
-    } else {
-      const res = joinByCode(v);
-      if (!res) {
-        err.textContent = 'Enter a valid invite code (at least 4 characters).';
-        return;
-      }
-      finish();
-      celebrate(`Joined ${res.data.subject}`);
-      app.navigate('home');
+    const res = joinByCode(input.value);
+    if (!res) {
+      err.textContent = 'Enter a valid invite code (at least 4 characters).';
+      return;
     }
+    finish();
+    celebrate(`Joined ${res.data.subject}`);
+    app.navigate('home');
   };
   primary.addEventListener('click', submit);
   input.addEventListener('keydown', e => {
@@ -106,10 +81,19 @@ export function openOnboarding(app: NotebookMindApp): void {
   });
   card.appendChild(primary);
 
+  // Create a course instead
+  const create = button('Create a course instead', 'secondary');
+  create.style.width = '100%';
+  create.addEventListener('click', () => {
+    finish();
+    openCourseModal(app, 'create');
+  });
+  card.appendChild(create);
+
   const skip = document.createElement('span');
   skip.style.cssText =
     'align-self:center;font-size:12.5px;color:var(--text-tertiary);cursor:pointer;padding:4px;transition:color var(--dur-fast) var(--ease-out)';
-  skip.textContent = isTeacher ? 'Skip for now' : 'Skip — explore the demo course';
+  skip.textContent = 'Skip — explore the demo course';
   skip.addEventListener('mouseenter', () => {
     skip.style.color = 'var(--text-primary)';
   });

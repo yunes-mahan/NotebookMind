@@ -169,6 +169,7 @@ export class NotebookMindApp extends Widget {
     if (this._courseSlot) {
       this._paintCourseSwitcher();
     }
+    this._paintTeachSection();
     this._updateCrumb();
 
     switch (screen) {
@@ -473,16 +474,14 @@ export class NotebookMindApp extends Widget {
         () => openCourseModal(this, 'join')
       )
     );
-    // Only teachers can create courses.
-    if (profile.role === 'teacher') {
-      pop.appendChild(
-        action(
-          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
-          'Create a course…',
-          () => openCourseModal(this, 'create')
-        )
-      );
-    }
+    // Anyone can create a course (they become its single admin).
+    pop.appendChild(
+      action(
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+        'Create a course…',
+        () => openCourseModal(this, 'create')
+      )
+    );
     slot.appendChild(pop);
 
     // Trigger row (select-styled)
@@ -522,10 +521,12 @@ export class NotebookMindApp extends Widget {
     slot.appendChild(trigger);
   }
 
-  /** Show the Teacher nav only for teacher accounts. */
+  /** Show the admin ("Teacher") nav only for a course you administer —
+   * i.e. one you created, or the seeded demo course (showcase). */
   private _paintTeachSection(): void {
     if (this._teachSection) {
-      this._teachSection.style.display = profile.role === 'teacher' ? '' : 'none';
+      const uc = activeCourse();
+      this._teachSection.style.display = uc.isOwn || uc.isDemo ? '' : 'none';
     }
   }
 

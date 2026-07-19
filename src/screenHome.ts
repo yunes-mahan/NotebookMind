@@ -14,7 +14,6 @@ import {
   createCourse,
   coursePercentOf
 } from './courseStore';
-import { profile } from './friendsData';
 import {
   button,
   maxWidth,
@@ -83,7 +82,6 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
   // ───────────────────────────── helpers ─────────────────────────────
 
   function noCoursesState(): HTMLElement {
-    const isTeacher = profile.role === 'teacher';
     const wrap = document.createElement('div');
     wrap.style.cssText =
       'display:flex;flex-direction:column;align-items:center;gap:14px;padding:64px 24px;text-align:center';
@@ -92,22 +90,15 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
       '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-text)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>' +
       '</div>' +
       '<span style="font-size:17px;font-weight:600;color:var(--text-primary)">You’re not in any course yet</span>' +
-      `<span style="font-size:13px;color:var(--text-tertiary);line-height:1.55;max-width:420px">${
-        isTeacher
-          ? 'Create a course to start publishing weeks, notebooks and slides for your students.'
-          : 'Join a course with the invite code from your teacher — or try DEMO2025 for the demo course.'
-      }</span>`;
+      '<span style="font-size:13px;color:var(--text-tertiary);line-height:1.55;max-width:420px">Join a course with an invite code (try DEMO2025 for the demo) — or create your own and become its admin.</span>';
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:8px;margin-top:4px';
-    const join = button('Join a course', isTeacher ? 'secondary' : 'primary');
+    const join = button('Join a course', 'primary');
     join.addEventListener('click', () => openCourseModal(app, 'join'));
+    const create = button('Create a course', 'secondary');
+    create.addEventListener('click', () => openCourseModal(app, 'create'));
     row.appendChild(join);
-    // Only teachers can create a course.
-    if (isTeacher) {
-      const create = button('Create a course', 'primary');
-      create.addEventListener('click', () => openCourseModal(app, 'create'));
-      row.appendChild(create);
-    }
+    row.appendChild(create);
     wrap.appendChild(row);
     return wrap;
   }
@@ -464,9 +455,8 @@ export function openCourseModal(
     '<span style="font-size:12.5px;color:var(--text-tertiary)">Join with an invite code, or create your own course as a teacher.</span>' +
     '</div>';
 
-  // Mode tabs (prototype segmented). Students can only join.
-  const canCreate = profile.role === 'teacher';
-  let mode: 'join' | 'create' = canCreate ? initialMode : 'join';
+  // Mode tabs (prototype segmented). Anyone can join or create.
+  let mode: 'join' | 'create' = initialMode;
   const track = document.createElement('div');
   track.style.cssText =
     'display:flex;gap:2px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:3px';
@@ -480,12 +470,7 @@ export function openCourseModal(
   const joinTab = tabBtn('Join a course');
   const createTab = tabBtn('Create a course');
   track.appendChild(joinTab);
-  if (canCreate) {
-    track.appendChild(createTab);
-  } else {
-    // Students only join — no tab strip needed.
-    track.style.display = 'none';
-  }
+  track.appendChild(createTab);
   cardEl.appendChild(track);
 
   const body = document.createElement('div');
