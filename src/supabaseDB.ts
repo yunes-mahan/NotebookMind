@@ -6,6 +6,7 @@ export interface IProfile {
   id: string;
   user_id: string;
   display_name: string | null;
+  avatar_url: string | null;
   role: string;
   points: number;
   weekly_points: number;
@@ -21,14 +22,16 @@ export async function getMyProfile(): Promise<IProfile | null> {
   }
   const { data } = await client
     .from('profiles')
-    .select('id,user_id,display_name,role,points,weekly_points,username,leaderboard_opt_in')
+    .select('id,user_id,display_name,avatar_url,role,points,weekly_points,username,leaderboard_opt_in')
     .eq('user_id', user.id)
     .single();
   return data as IProfile | null;
 }
 
 export async function updateProfile(
-  fields: Partial<Pick<IProfile, 'display_name' | 'username' | 'leaderboard_opt_in'>>
+  fields: Partial<
+    Pick<IProfile, 'display_name' | 'avatar_url' | 'username' | 'leaderboard_opt_in'>
+  >
 ): Promise<void> {
   const client = getClient();
   const user = getCurrentUser();
@@ -237,6 +240,27 @@ export interface IDbCourse {
   code: string;
   invite_code: string;
   isOwn: boolean;
+  teacher_name?: string | null;
+}
+
+/** Resolve display names for a set of user ids (profiles are publicly readable). */
+async function namesByUserId(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const client = getClient();
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  if (!client || unique.length === 0) {
+    return out;
+  }
+  const { data } = await client
+    .from('profiles')
+    .select('user_id,display_name')
+    .in('user_id', unique);
+  for (const row of (data as any[]) ?? []) {
+    if (row.display_name) {
+      out.set(row.user_id, row.display_name);
+    }
+  }
+  return out;
 }
 
 export interface IDbWeek {
@@ -298,7 +322,21 @@ export async function joinCourseByInvite(code: string): Promise<IDbCourse | null
     return null;
   }
   const r = data[0] as any;
-  return { id: r.id, name: r.name, code: r.code, invite_code: r.invite_code, isOwn: false };
+  // Resolve the real teacher name now that we're enrolled (RLS lets us read
+  // the course row → teacher_id → their public profile).
+  let teacherName: string | null = null;
+  const { data: courseRow } = await client
+    .from('courses')
+    .select('teacher_id')
+    .eq('id', r.id)
+    .single();
+  if (courseRow?.teacher_id) {
+    teacherName = (await namesByUserId([courseRow.teacher_id])).get(courseRow.teacher_id) ?? null;
+  }
+  return {
+    id: r.id, name: r.name, code: r.code, invite_code: r.invite_code,
+    isOwn: false, teacher_name: teacherName
+  };
 }
 
 /** Courses the signed-in user teaches or is enrolled in. */
@@ -309,24 +347,43 @@ export async function listMyCourses(): Promise<IDbCourse[]> {
     return [];
   }
   const byId = new Map<string, IDbCourse>();
+  const teacherIds: string[] = [];
   // Courses I teach.
   const own = await client
     .from('courses')
-    .select('id,name,code,invite_code')
+    .select('id,name,code,invite_code,teacher_id')
     .eq('teacher_id', user.id);
   for (const c of (own.data as any[]) ?? []) {
-    byId.set(c.id, { id: c.id, name: c.name, code: c.code, invite_code: c.invite_code, isOwn: true });
+    byId.set(c.id, {
+      id: c.id, name: c.name, code: c.code, invite_code: c.invite_code,
+      isOwn: true, teacher_name: null
+    });
+    if (c.teacher_id) teacherIds.push(c.teacher_id);
   }
   // Courses I'm enrolled in.
   const enr = await client
     .from('course_enrollments')
-    .select('courses(id,name,code,invite_code)')
+    .select('courses(id,name,code,invite_code,teacher_id)')
     .eq('user_id', user.id);
   for (const row of (enr.data as any[]) ?? []) {
     const c = row.courses;
     if (c && !byId.has(c.id)) {
-      byId.set(c.id, { id: c.id, name: c.name, code: c.code, invite_code: c.invite_code, isOwn: false });
+      byId.set(c.id, {
+        id: c.id, name: c.name, code: c.code, invite_code: c.invite_code,
+        isOwn: false, teacher_name: null
+      });
+      if (c.teacher_id) teacherIds.push(c.teacher_id);
+      (byId.get(c.id) as any)._teacherId = c.teacher_id;
     }
+  }
+  // Resolve real teacher display names (falls back to null when unknown).
+  const names = await namesByUserId(teacherIds);
+  for (const c of byId.values()) {
+    const tid = (c as any)._teacherId ?? (c.isOwn ? user.id : undefined);
+    if (tid) {
+      c.teacher_name = names.get(tid) ?? c.teacher_name;
+    }
+    delete (c as any)._teacherId;
   }
   return Array.from(byId.values());
 }

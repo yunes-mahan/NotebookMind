@@ -1205,6 +1205,12 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
 
   // Prefill from the notebook's existing (generated / seeded) task, if any.
   const seed = demoChallenge(key, i, source);
+  // The challenge the dynamic section renders from. Starts at the seed and is
+  // replaced when the teacher regenerates, so the type-specific fields (MC
+  // options, buggy code) actually refresh instead of keeping the old values.
+  let current: IAuthoredChallenge | undefined = seed as
+    | IAuthoredChallenge
+    | undefined;
   let type: IAuthoredChallenge['type'] =
     (seed?.type as IAuthoredChallenge['type']) ?? 'predict-mc';
   const typeRow = document.createElement('div');
@@ -1244,8 +1250,8 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
   function buildDynamic(): void {
     dynamic.innerHTML = '';
     if (type === 'predict-mc') {
-      const seedOpts = type === seed?.type ? seed?.options ?? [] : [];
-      const seedAns = type === seed?.type ? seed?.answer : undefined;
+      const seedOpts = type === current?.type ? current?.options ?? [] : [];
+      const seedAns = type === current?.type ? current?.answer : undefined;
       const opts: HTMLInputElement[] = [];
       let correct = Math.max(0, seedOpts.indexOf(seedAns ?? ''));
       for (let k = 0; k < 4; k++) {
@@ -1272,7 +1278,7 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
       });
     } else if (type === 'bugfix') {
       const code = textArea(
-        type === seed?.type ? seed?.presentedCode ?? source : source,
+        type === current?.type ? current?.presentedCode ?? source : source,
         7
       );
       code.style.fontFamily = 'var(--font-mono)';
@@ -1401,20 +1407,33 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
       } else {
         ch = dummyAuthored(source, type);
       }
+      current = ch;
       type = ch.type;
       summary.value = ch.summary;
       instructions.value = ch.instructions;
       hint1.value = ch.hints[0] ?? '';
       hint2.value = ch.hints[1] ?? '';
       diffSel.value = ch.difficulty;
+      // Re-render the type buttons and the type-specific fields (MC options,
+      // buggy code) so the generated content actually appears, not just the
+      // shared summary/instructions.
+      buildDynamic();
+      repaintTypeButtons();
       setAuthoredChallenge(key, i, ch);
       status.textContent = isAiReady()
         ? '✓ Task generated and saved.'
         : '✓ Demo task generated and saved.';
     } catch {
       const ch = dummyAuthored(source, type);
+      current = ch;
+      type = ch.type;
       summary.value = ch.summary;
       instructions.value = ch.instructions;
+      hint1.value = ch.hints[0] ?? '';
+      hint2.value = ch.hints[1] ?? '';
+      diffSel.value = ch.difficulty;
+      buildDynamic();
+      repaintTypeButtons();
       setAuthoredChallenge(key, i, ch);
       status.textContent = '✓ Demo task generated and saved.';
     } finally {

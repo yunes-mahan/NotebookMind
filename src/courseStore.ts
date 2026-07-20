@@ -1,5 +1,5 @@
 import { COURSE, ICourse, ICourseNotebook, ICourseWeek, NbStatus } from './courseData';
-import { profile } from './friendsData';
+import { profile, setProfile } from './friendsData';
 import {
   listMyCourses,
   getCourseWeeks,
@@ -303,7 +303,7 @@ export async function loadCoursesFromDB(): Promise<void> {
       backendId: m.id,
       data: {
         subject: m.name,
-        teacher: m.isOwn ? profile.name : 'Course teacher',
+        teacher: m.isOwn ? profile.name : m.teacher_name || 'Course teacher',
         currentWeek: 1,
         weeks,
         notebooks: {}
@@ -340,7 +340,7 @@ export async function joinCourse(codeRaw: string): Promise<IUserCourse | null> {
       isOwn: joined.isOwn,
       isDemo: false,
       backendId: joined.id,
-      data: { subject: joined.name, teacher: 'Course teacher', currentWeek: 1, weeks, notebooks: {} }
+      data: { subject: joined.name, teacher: joined.teacher_name || 'Course teacher', currentWeek: 1, weeks, notebooks: {} }
     };
     courses.push(uc);
     activeId = uc.id;
@@ -413,6 +413,14 @@ export async function loadProgressFromDB(): Promise<void> {
   ]);
   if (prof && typeof prof.points === 'number') {
     pointsEngine.syncTotal(prof.points);
+  }
+  // Reflect the account's saved display name + photo (edits persist across
+  // reloads / devices), overriding the local sign-in defaults.
+  if (prof) {
+    setProfile({
+      name: prof.display_name ?? profile.name,
+      avatarUrl: prof.avatar_url ?? ''
+    });
   }
   completedKeys.clear();
   for (const k of keys) {

@@ -1,5 +1,7 @@
 import { profile, setProfile } from './friendsData';
 import { avatar, button, celebrate } from './uiKit';
+import { isConnected } from './supabase';
+import { updateProfile } from './supabaseDB';
 
 /**
  * Shared "Edit profile" dialog (prototype style) — upload/replace a profile
@@ -121,6 +123,13 @@ export function openProfileModal(onSaved?: () => void): void {
       return;
     }
     setProfile({ name, avatarUrl: pendingAvatar });
+    // Persist to the account so the name + photo survive a reload / new device.
+    if (isConnected()) {
+      void updateProfile({
+        display_name: name,
+        avatar_url: pendingAvatar || null
+      }).catch(() => undefined);
+    }
     dispose();
     celebrate('Profile updated');
     onSaved?.();
