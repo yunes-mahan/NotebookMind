@@ -439,7 +439,8 @@ function teacherChat(): HTMLElement {
 
 // ── Weeks & content (prototype layout) ────────────────────────────
 // Session stores: expanded rows · timed releases · uploaded material names.
-const tExpand = new Map<string, boolean>();
+const tExpand = new Map<string, boolean>(); // notebook → practice-tasks open
+const tTiming = new Set<string>(); // notebook ids with the timing panel open
 const tSchedules = new Map<string, string>();
 const tEditWeek = new Set<number>();
 // Teacher-uploaded notebooks (session-scoped): notebook id → parsed cells.
@@ -843,14 +844,37 @@ function nbAdminRow(
   const row = document.createElement('div');
   row.style.cssText =
     'display:flex;align-items:center;gap:12px;padding:9px 16px;transition:background-color var(--dur-fast) var(--ease-out)';
-  row.appendChild(
+  // Clickable left area (status · title · chevron) → open the practice tasks.
+  const left = document.createElement('div');
+  left.style.cssText =
+    'display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer;padding:3px 6px;margin:-3px -6px;border-radius:6px;transition:background-color var(--dur-fast) var(--ease-out)';
+  left.title = 'Open practice tasks';
+  left.appendChild(
     statusIcon(nb.status === 'done' ? 'done' : locked ? 'backlog' : 'started', 14)
   );
   const title = document.createElement('span');
   title.style.cssText =
     'font-size:12.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)';
   title.textContent = nb.title;
-  row.appendChild(title);
+  left.appendChild(title);
+  const chev = document.createElement('span');
+  chev.style.cssText =
+    'flex:0 0 auto;display:inline-flex;color:var(--text-quaternary);transition:transform var(--dur-fast) var(--ease-out);' +
+    (tExpand.get(nb.id) ? 'transform:rotate(180deg)' : '');
+  chev.innerHTML =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+  left.appendChild(chev);
+  left.addEventListener('mouseenter', () => {
+    left.style.background = 'rgba(0,0,0,0.04)';
+  });
+  left.addEventListener('mouseleave', () => {
+    left.style.background = 'transparent';
+  });
+  left.addEventListener('click', () => {
+    tExpand.set(nb.id, !tExpand.get(nb.id));
+    repaint();
+  });
+  row.appendChild(left);
 
   const stateLbl = document.createElement('span');
   stateLbl.style.cssText =
@@ -878,17 +902,17 @@ function nbAdminRow(
   });
   row.appendChild(toggleBtn);
 
-  const tasksBtn = button(
-    (tExpand.get(nb.id) ? 'Hide tasks ▴' : 'Tasks & timing ▾'),
-    'ghost'
-  );
-  tasksBtn.style.height = 'var(--control-sm)';
-  tasksBtn.style.fontSize = '12px';
-  tasksBtn.addEventListener('click', () => {
-    tExpand.set(nb.id, !tExpand.get(nb.id));
+  // Timing is its own concern — a separate toggle, not bundled with tasks.
+  const timingBtn = button(tTiming.has(nb.id) ? 'Timing ▴' : 'Timing ▾', 'ghost');
+  timingBtn.style.height = 'var(--control-sm)';
+  timingBtn.style.fontSize = '12px';
+  if (sched) timingBtn.style.color = 'var(--accent-text)';
+  timingBtn.addEventListener('click', () => {
+    if (tTiming.has(nb.id)) tTiming.delete(nb.id);
+    else tTiming.add(nb.id);
     repaint();
   });
-  row.appendChild(tasksBtn);
+  row.appendChild(timingBtn);
 
   let delArmed = false;
   const delBtn = button('Delete', 'ghost');
@@ -907,25 +931,22 @@ function nbAdminRow(
     uploadedDocs.delete(nb.id);
     tSchedules.delete(nb.id);
     tExpand.delete(nb.id);
+    tTiming.delete(nb.id);
     repaint();
   });
   row.appendChild(delBtn);
   wrap.appendChild(row);
 
-  // ── Expanded: timed release + generated tasks ──
-  if (tExpand.get(nb.id)) {
-    const panel = document.createElement('div');
-    panel.style.cssText =
-      'display:flex;flex-direction:column;gap:12px;padding:4px 16px 16px 42px;background:var(--bg-base)';
-
-    // Timed release
-    const relRow = document.createElement('div');
-    relRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  // ── Timing panel (separate; toggled by the Timing button) ──
+  if (tTiming.has(nb.id)) {
+    const tp = document.createElement('div');
+    tp.style.cssText =
+      'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 16px 14px 42px;background:var(--bg-base)';
     const capsLbl = document.createElement('span');
     capsLbl.style.cssText =
       'font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary)';
     capsLbl.textContent = 'Timed release';
-    relRow.appendChild(capsLbl);
+    tp.appendChild(capsLbl);
     const dt = document.createElement('input');
     dt.type = 'datetime-local';
     dt.value = sched;
@@ -940,7 +961,7 @@ function nbAdminRow(
       }
       repaint();
     });
-    relRow.appendChild(dt);
+    tp.appendChild(dt);
     if (sched) {
       const clear = document.createElement('span');
       clear.style.cssText =
@@ -952,21 +973,23 @@ function nbAdminRow(
         tSchedules.delete(nb.id);
         repaint();
       });
-      relRow.appendChild(clear);
+      tp.appendChild(clear);
     }
     const relHint = document.createElement('span');
     relHint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
     relHint.textContent = 'Locks until the chosen time, then releases automatically.';
-    relRow.appendChild(relHint);
-    panel.appendChild(relRow);
+    tp.appendChild(relHint);
+    wrap.appendChild(tp);
+  }
 
-    const sepEl = document.createElement('div');
-    sepEl.style.cssText = 'height:1px;background:var(--border-subtle)';
-    panel.appendChild(sepEl);
+  // ── Practice tasks panel (opened by clicking the notebook name) ──
+  if (tExpand.get(nb.id)) {
+    const panel = document.createElement('div');
+    panel.style.cssText =
+      'display:flex;flex-direction:column;gap:12px;padding:6px 16px 16px 42px;background:var(--bg-base)';
 
-    // Generated tasks (per cell)
     const tasksHead = document.createElement('div');
-    tasksHead.style.cssText = 'display:flex;align-items:center;gap:8px';
+    tasksHead.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
     tasksHead.innerHTML =
       '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">Practice tasks</span>' +
       '<span style="font-size:11.5px;color:var(--text-tertiary)">One per cell — change the type, edit the description and solution.</span>';
