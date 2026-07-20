@@ -4,13 +4,13 @@
    every screen composes these so the whole app reads as one language.
    ───────────────────────────────────────────────────────────────────────── */
 
-/** NotebookMind brand mark (document icon, fill-based, viewBox 0 0 24 24). */
-export const NM_LOGO_PATH =
-  'm14 7v-6.54a6.977 6.977 0 0 1 2.465 1.59l3.484 3.486a6.954 6.954 0 0 1 1.591 2.464h-6.54a1 1 0 0 1 -1-1zm8 3.485v8.515a5.006 5.006 0 0 1 -5 5h-10a5.006 5.006 0 0 1 -5-5v-14a5.006 5.006 0 0 1 5-5h4.515c.163 0 .324.013.485.024v6.976a3 3 0 0 0 3 3h6.976c.011.161.024.322.024.485zm-8 8.515a1 1 0 0 0 -1-1h-5a1 1 0 0 0 0 2h5a1 1 0 0 0 1-1zm3-4a1 1 0 0 0 -1-1h-8a1 1 0 0 0 0 2h8a1 1 0 0 0 1-1z';
+import { NM_LOGO_SRC } from './logoAsset';
 
-/** Brand logo SVG markup at a given pixel size (white glyph, for accent tiles). */
-export function logoSvg(size: number, color = '#fff'): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}"><path d="${NM_LOGO_PATH}"></path></svg>`;
+/** NotebookMind brand logo — the user-provided PNG (transparent, 89×122),
+ * rendered at a given box height with the original aspect ratio preserved. */
+export function logoImg(height: number): string {
+  const width = Math.round((height * 89) / 122);
+  return `<img src="${NM_LOGO_SRC}" alt="Runcell" width="${width}" height="${height}" style="display:block;height:${height}px;width:${width}px;object-fit:contain" />`;
 }
 
 export function button(

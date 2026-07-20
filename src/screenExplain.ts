@@ -5,7 +5,7 @@ import { renderMarkdown } from './markdown';
 import { openSlides, renderSlide } from './slidesModal';
 import { deckForPdf } from './slidesData';
 import { demoCellMeta, demoCellSlides, cellTitle } from './demoData';
-import { activeBackendCourseId } from './courseStore';
+import { activeBackendCourseId, activeCourse } from './courseStore';
 import { profile } from './friendsData';
 import { isConnected } from './supabase';
 import { getCellComments, addCellComment, ICellComment } from './supabaseDB';
@@ -297,7 +297,9 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
 
   // ── Teacher tab (real teacher notes from the DB) ──────────────
   function renderTeacherTab(body: HTMLElement, i: number): void {
-    const isTeacher = profile.role === 'teacher';
+    // No account roles anymore: you're the "teacher" of a course if you created
+    // it (its admin). That gates posting teacher notes on its cells.
+    const isTeacher = activeCourse().isOwn;
     body.appendChild(spinner('Loading teacher notes…'));
 
     void loadComments(i).then(rows => {

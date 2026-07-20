@@ -51,23 +51,22 @@ export function renderSession(host: HTMLElement, app: NotebookMindApp): void {
   count.style.cssText = 'font-size:12px;color:var(--text-quaternary)';
   count.textContent = `${doc.cells.length} cells`;
   titleRow.appendChild(count);
-  if (app.explainAllowed) {
-    titleRow.appendChild(
-      segmented(
-        [
-          { id: 'learn', label: 'Learn' },
-          { id: 'explain', label: 'Explain' }
-        ],
-        mode,
-        id => {
-          if (id !== mode) {
-            mode = id as Mode;
-            renderBody();
-          }
+  // Learn / Explain are always available for any notebook.
+  titleRow.appendChild(
+    segmented(
+      [
+        { id: 'learn', label: 'Learn' },
+        { id: 'explain', label: 'Explain' }
+      ],
+      mode,
+      id => {
+        if (id !== mode) {
+          mode = id as Mode;
+          renderBody();
         }
-      )
-    );
-  }
+      }
+    )
+  );
   head.appendChild(titleRow);
   head.appendChild(assignmentCard(doc));
   root.appendChild(head);
@@ -78,7 +77,7 @@ export function renderSession(host: HTMLElement, app: NotebookMindApp): void {
 
   function renderBody(): void {
     body.innerHTML = '';
-    if (mode === 'explain' && app.explainAllowed) {
+    if (mode === 'explain') {
       renderExplain(body, app);
     } else {
       renderLearn(body, app);

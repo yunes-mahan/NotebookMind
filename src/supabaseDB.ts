@@ -690,6 +690,46 @@ export async function getCellComments(
   return (data as ICellComment[]) ?? [];
 }
 
+/**
+ * Set (or clear) the teacher's note for a cell — a single editable note, unlike
+ * append-only student comments. Replaces this teacher's existing note for the
+ * cell so editing in the Teacher screen doesn't pile up duplicates. Shows up in
+ * the Explain "Teacher notes" tab for enrolled students.
+ */
+export async function upsertTeacherNote(
+  courseId: string | undefined,
+  notebookKey: string,
+  cellIndex: number,
+  body: string
+): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  let del = client
+    .from('cell_comments')
+    .delete()
+    .eq('user_id', user.id)
+    .eq('notebook_key', notebookKey)
+    .eq('cell_index', cellIndex)
+    .eq('role', 'teacher');
+  del = courseId ? del.eq('course_id', courseId) : del.is('course_id', null);
+  await del;
+  const text = body.trim();
+  if (text) {
+    await client.from('cell_comments').insert({
+      user_id: user.id,
+      course_id: courseId ?? null,
+      notebook_key: notebookKey,
+      cell_index: cellIndex,
+      role: 'teacher',
+      author_name: null,
+      body: text
+    });
+  }
+}
+
 /** Post a comment (teacher note or student comment) on a cell. */
 export async function addCellComment(opts: {
   courseId?: string;

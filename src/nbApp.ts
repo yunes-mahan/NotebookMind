@@ -6,7 +6,7 @@ import { KernelRunner } from './kernelRunner';
 import { XpSession } from './xp';
 import { IChallenge } from './challenge';
 import { pointsEngine } from './points';
-import { button, avatar, logoSvg } from './uiKit';
+import { button, avatar, logoImg } from './uiKit';
 import { profile, clearUser, invited, MATES } from './friendsData';
 import {
   activeCourse,
@@ -139,8 +139,8 @@ export class NotebookMindApp extends Widget {
     this.services = services;
     this.runner = new KernelRunner(services);
     this.id = 'notebookmind-app';
-    this.title.label = 'NotebookMind';
-    this.title.caption = 'NotebookMind — gamified learning';
+    this.title.label = 'Runcell';
+    this.title.caption = 'Runcell — gamified learning';
     this.title.closable = true;
     this.addClass('nm-app');
     this._build();
@@ -173,6 +173,7 @@ export class NotebookMindApp extends Widget {
     if (this._courseSlot) {
       this._paintCourseSwitcher();
     }
+    this._paintTeachSection();
     this._updateCrumb();
 
     switch (screen) {
@@ -293,10 +294,8 @@ export class NotebookMindApp extends Widget {
     brand.style.cssText =
       'display:flex;align-items:center;gap:8px;padding:16px 16px 14px';
     brand.innerHTML =
-      '<div style="width:22px;height:22px;border-radius:6px;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 6px var(--brand-glow)">' +
-      logoSvg(12) +
-      '</div>' +
-      '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">NotebookMind</span>';
+      `<span style="display:inline-flex;flex:0 0 auto">${logoImg(18)}</span>` +
+      '<span style="font-weight:600;font-size:14px;letter-spacing:-0.018em;color:var(--text-primary)">Runcell</span>';
     bar.appendChild(brand);
 
     // Course switcher (global: switch · join · create) — always visible
@@ -479,16 +478,14 @@ export class NotebookMindApp extends Widget {
         () => openCourseModal(this, 'join')
       )
     );
-    // Only teachers can create courses.
-    if (profile.role === 'teacher') {
-      pop.appendChild(
-        action(
-          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
-          'Create a course…',
-          () => openCourseModal(this, 'create')
-        )
-      );
-    }
+    // Anyone can create a course (they become its single admin).
+    pop.appendChild(
+      action(
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+        'Create a course…',
+        () => openCourseModal(this, 'create')
+      )
+    );
     slot.appendChild(pop);
 
     // Trigger row (select-styled)
@@ -528,10 +525,12 @@ export class NotebookMindApp extends Widget {
     slot.appendChild(trigger);
   }
 
-  /** Show the Teacher nav only for teacher accounts. */
+  /** Show the admin ("Teacher") nav only for a course you administer —
+   * i.e. one you created, or the seeded demo course (showcase). */
   private _paintTeachSection(): void {
     if (this._teachSection) {
-      this._teachSection.style.display = profile.role === 'teacher' ? '' : 'none';
+      const uc = activeCourse();
+      this._teachSection.style.display = uc.isOwn || uc.isDemo ? '' : 'none';
     }
   }
 

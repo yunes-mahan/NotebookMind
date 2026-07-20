@@ -43,7 +43,7 @@ export class NotebookMindPanel extends Widget {
     this._tracker = tracker;
     this.id = 'notebookmind-panel';
     this.title.label = '📓';
-    this.title.caption = 'NotebookMind';
+    this.title.caption = 'Runcell';
     this.addClass('nm-panel');
     this._build();
     this._bindEvents();
@@ -108,7 +108,7 @@ export class NotebookMindPanel extends Widget {
     const logoArea = document.createElement('div');
     logoArea.style.cssText =
       'font-size:14px;font-weight:700;color:white;display:flex;align-items:center;gap:6px';
-    logoArea.innerHTML = '<span style="font-size:18px">📓</span><span>NotebookMind</span>';
+    logoArea.innerHTML = '<span style="font-size:18px">📓</span><span>Runcell</span>';
 
     this._pointsBadge = document.createElement('div');
     this._pointsBadge.style.cssText = [

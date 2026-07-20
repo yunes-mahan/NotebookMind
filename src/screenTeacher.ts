@@ -8,6 +8,9 @@ import {
   cellTitle,
   setAuthoredChallenge,
   demoChallenge,
+  setTeacherExplain,
+  getTeacherExplain,
+  demoCellMeta,
   IAuthoredChallenge
 } from './demoData';
 import { Difficulty } from './challenge';
@@ -27,6 +30,8 @@ import {
   upsertCourseWeekSlides,
   getCellFailStats,
   getCourseActivity,
+  getCellComments,
+  upsertTeacherNote,
   ICellFailStat,
   ICourseActivity
 } from './supabaseDB';
@@ -530,7 +535,7 @@ function teacherChat(context: string): HTMLElement {
 
 // ── Weeks & content (prototype layout) ────────────────────────────
 // Session stores: expanded rows · timed releases · uploaded material names.
-const tExpand = new Map<string, boolean>();
+const tExpand = new Map<string, boolean>(); // notebook → practice-tasks open
 const tSchedules = new Map<string, string>();
 const tEditWeek = new Set<number>();
 // Teacher-uploaded notebooks (session-scoped): notebook id → parsed cells.
@@ -933,32 +938,99 @@ function nbAdminRow(
   wrap.style.cssText =
     'display:flex;flex-direction:column;border-top:1px solid var(--border-subtle)';
 
+  const open = !!tExpand.get(nb.id);
   const row = document.createElement('div');
   row.style.cssText =
-    'display:flex;align-items:center;gap:12px;padding:9px 16px;transition:background-color var(--dur-fast) var(--ease-out)';
-  row.appendChild(
+    'display:flex;align-items:center;gap:10px;padding:9px 16px;transition:background-color var(--dur-fast) var(--ease-out)';
+
+  // Clickable left area (status · title · chevron) → open the practice tasks.
+  const left = document.createElement('div');
+  left.style.cssText =
+    'display:flex;align-items:center;gap:9px;min-width:0;cursor:pointer;padding:5px 9px;margin:-5px -6px;border-radius:8px;transition:background-color var(--dur-fast) var(--ease-out)';
+  left.title = 'Open practice tasks';
+  left.appendChild(
     statusIcon(nb.status === 'done' ? 'done' : locked ? 'backlog' : 'started', 14)
   );
   const title = document.createElement('span');
   title.style.cssText =
-    'font-size:12.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)';
+    'font-size:12.5px;font-weight:600;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color var(--dur-fast) var(--ease-out);color:' +
+    (open ? 'var(--accent-text)' : 'var(--text-primary)');
   title.textContent = nb.title;
-  row.appendChild(title);
+  left.appendChild(title);
+  const chev = document.createElement('span');
+  chev.style.cssText =
+    'flex:0 0 auto;display:inline-flex;transition:transform var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out);color:' +
+    (open ? 'var(--accent-text)' : 'var(--text-quaternary)') +
+    (open ? ';transform:rotate(180deg)' : '');
+  chev.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+  left.appendChild(chev);
+  left.addEventListener('mouseenter', () => {
+    left.style.background = 'var(--accent-subtle-bg)';
+    title.style.color = 'var(--accent-text)';
+    chev.style.color = 'var(--accent-text)';
+  });
+  left.addEventListener('mouseleave', () => {
+    left.style.background = 'transparent';
+    if (!open) {
+      title.style.color = 'var(--text-primary)';
+      chev.style.color = 'var(--text-quaternary)';
+    }
+  });
+  left.addEventListener('click', () => {
+    tExpand.set(nb.id, !tExpand.get(nb.id));
+    repaint();
+  });
+  row.appendChild(left);
+
+  // Timed release — inline, right behind the title.
+  const timeWrap = document.createElement('div');
+  timeWrap.style.cssText =
+    'display:flex;align-items:center;gap:4px;flex:0 0 auto;height:var(--control-sm);box-sizing:border-box;padding:0 4px 0 8px;border-radius:7px;border:1px solid ' +
+    (sched ? 'rgba(94,106,210,0.4)' : 'var(--border-default)') +
+    ';background:' + (sched ? 'var(--accent-subtle-bg)' : 'var(--bg-panel)');
+  timeWrap.title = 'Timed release — locks the notebook until this time';
+  timeWrap.innerHTML =
+    `<span style="display:inline-flex;flex:0 0 auto;color:${sched ? 'var(--accent-text)' : 'var(--text-quaternary)'}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg></span>`;
+  const dt = document.createElement('input');
+  dt.type = 'datetime-local';
+  dt.value = sched;
+  dt.style.cssText =
+    `border:none;outline:none;background:transparent;font-family:var(--font-sans);font-size:11.5px;padding:0;max-width:152px;color:${sched ? 'var(--accent-text)' : 'var(--text-tertiary)'}`;
+  dt.addEventListener('change', () => {
+    if (dt.value) {
+      tSchedules.set(nb.id, dt.value);
+      nb.status = 'locked';
+    } else {
+      tSchedules.delete(nb.id);
+    }
+    repaint();
+  });
+  timeWrap.appendChild(dt);
+  if (sched) {
+    const clr = document.createElement('span');
+    clr.style.cssText =
+      'flex:0 0 auto;cursor:pointer;color:var(--accent-text);display:inline-flex;padding:2px;border-radius:4px';
+    clr.title = 'Clear schedule';
+    clr.innerHTML =
+      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    clr.addEventListener('click', () => {
+      tSchedules.delete(nb.id);
+      repaint();
+    });
+    timeWrap.appendChild(clr);
+  }
+  row.appendChild(timeWrap);
+
+  const spacer = document.createElement('span');
+  spacer.style.cssText = 'flex:1;min-width:8px';
+  row.appendChild(spacer);
 
   const stateLbl = document.createElement('span');
   stateLbl.style.cssText =
-    'font-size:11.5px;font-weight:500;white-space:nowrap;color:' +
+    'font-size:11.5px;font-weight:500;white-space:nowrap;flex:0 0 auto;color:' +
     (locked ? (sched ? 'var(--accent-text)' : 'var(--text-quaternary)') : 'var(--green-400)');
-  if (locked && sched) {
-    stateLbl.textContent = `Releases ${new Date(sched).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })}`;
-  } else {
-    stateLbl.textContent = locked ? 'Locked' : 'Unlocked';
-  }
+  stateLbl.textContent = locked ? (sched ? 'Scheduled' : 'Locked') : 'Unlocked';
   row.appendChild(stateLbl);
 
   const toggleBtn = button(locked ? 'Unlock' : 'Lock', 'secondary');
@@ -970,18 +1042,6 @@ function nbAdminRow(
     repaint();
   });
   row.appendChild(toggleBtn);
-
-  const tasksBtn = button(
-    (tExpand.get(nb.id) ? 'Hide tasks ▴' : 'Tasks & timing ▾'),
-    'ghost'
-  );
-  tasksBtn.style.height = 'var(--control-sm)';
-  tasksBtn.style.fontSize = '12px';
-  tasksBtn.addEventListener('click', () => {
-    tExpand.set(nb.id, !tExpand.get(nb.id));
-    repaint();
-  });
-  row.appendChild(tasksBtn);
 
   let delArmed = false;
   const delBtn = button('Delete', 'ghost');
@@ -1005,61 +1065,14 @@ function nbAdminRow(
   row.appendChild(delBtn);
   wrap.appendChild(row);
 
-  // ── Expanded: timed release + generated tasks ──
+  // ── Practice tasks panel (opened by clicking the notebook name) ──
   if (tExpand.get(nb.id)) {
     const panel = document.createElement('div');
     panel.style.cssText =
-      'display:flex;flex-direction:column;gap:12px;padding:4px 16px 16px 42px;background:var(--bg-base)';
+      'display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px 42px;background:var(--bg-base)';
 
-    // Timed release
-    const relRow = document.createElement('div');
-    relRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
-    const capsLbl = document.createElement('span');
-    capsLbl.style.cssText =
-      'font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-quaternary)';
-    capsLbl.textContent = 'Timed release';
-    relRow.appendChild(capsLbl);
-    const dt = document.createElement('input');
-    dt.type = 'datetime-local';
-    dt.value = sched;
-    dt.style.cssText =
-      'background:var(--bg-panel);color:var(--text-primary);border:1px solid var(--border-default);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--font-sans);outline:none';
-    dt.addEventListener('change', () => {
-      if (dt.value) {
-        tSchedules.set(nb.id, dt.value);
-        nb.status = 'locked';
-      } else {
-        tSchedules.delete(nb.id);
-      }
-      repaint();
-    });
-    relRow.appendChild(dt);
-    if (sched) {
-      const clear = document.createElement('span');
-      clear.style.cssText =
-        'font-size:11.5px;color:var(--text-quaternary);cursor:pointer';
-      clear.textContent = 'Clear';
-      clear.addEventListener('mouseenter', () => (clear.style.color = 'var(--red-400)'));
-      clear.addEventListener('mouseleave', () => (clear.style.color = 'var(--text-quaternary)'));
-      clear.addEventListener('click', () => {
-        tSchedules.delete(nb.id);
-        repaint();
-      });
-      relRow.appendChild(clear);
-    }
-    const relHint = document.createElement('span');
-    relHint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
-    relHint.textContent = 'Locks until the chosen time, then releases automatically.';
-    relRow.appendChild(relHint);
-    panel.appendChild(relRow);
-
-    const sepEl = document.createElement('div');
-    sepEl.style.cssText = 'height:1px;background:var(--border-subtle)';
-    panel.appendChild(sepEl);
-
-    // Generated tasks (per cell)
     const tasksHead = document.createElement('div');
-    tasksHead.style.cssText = 'display:flex;align-items:center;gap:8px';
+    tasksHead.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
     tasksHead.innerHTML =
       '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">Practice tasks</span>' +
       '<span style="font-size:11.5px;color:var(--text-tertiary)">One per cell — change the type, edit the description and solution.</span>';
@@ -1207,6 +1220,27 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
   hint1.placeholder = 'A gentle hint.';
   hint2.placeholder = 'A more direct hint.';
 
+  // Teacher note for this cell — shown to students in the Explain tab.
+  const teacherNote = textArea(
+    getTeacherExplain(key, i) ?? demoCellMeta(key, i)?.teacher ?? '',
+    3
+  );
+  teacherNote.placeholder =
+    'Optional note for students on this cell — appears under “Teacher notes” in the Explain tab. Markdown supported.';
+  // Prefill from the persisted note (survives reloads) when connected.
+  const noteCid = activeBackendCourseId();
+  if (isConnected() && noteCid) {
+    void getCellComments(noteCid, key, i)
+      .then(rows => {
+        const saved = rows.find(r => r.role === 'teacher');
+        if (saved && !teacherNote.value.trim()) {
+          teacherNote.value = saved.body;
+          setTeacherExplain(key, i, saved.body);
+        }
+      })
+      .catch(() => null);
+  }
+
   function buildDynamic(): void {
     dynamic.innerHTML = '';
     if (type === 'predict-mc') {
@@ -1335,7 +1369,14 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
 
   saveBtn.addEventListener('click', () => {
     setAuthoredChallenge(key, i, compose());
-    status.textContent = '✓ Saved — students will see this task in Learn mode.';
+    const note = teacherNote.value.trim();
+    setTeacherExplain(key, i, note);
+    // Persist the note so it survives reloads and reaches students in Explain.
+    const cid = activeBackendCourseId();
+    if (isConnected() && cid) {
+      void upsertTeacherNote(cid, key, i, note).catch(() => null);
+    }
+    status.textContent = '✓ Saved — task shows in Learn, note in the Explain tab.';
   });
 
   aiBtn.addEventListener('click', async () => {
@@ -1392,6 +1433,7 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
   wrap.appendChild(field('Instructions', instructions));
   wrap.appendChild(field('Hint 1', hint1));
   wrap.appendChild(field('Hint 2', hint2));
+  wrap.appendChild(field('Teacher note · shown in the Explain tab', teacherNote));
   wrap.appendChild(actions);
   wrap.appendChild(status);
   return wrap;
