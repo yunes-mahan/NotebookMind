@@ -450,7 +450,7 @@ function topicUnderstandingCard(topics: ITopicStat[]): HTMLElement {
     // Stacked understood/failed bar.
     const bar = document.createElement('div');
     bar.style.cssText =
-      'display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--bg-panel);border:1px solid var(--border-subtle)';
+      'display:flex;height:7px;border-radius:99px;overflow:hidden;background:var(--bg-panel);border:1px solid var(--border-subtle)';
     const g = document.createElement('div');
     g.style.cssText = `width:${understood}%;background:var(--green-400);transition:width var(--dur-slow) var(--ease-out)`;
     const r = document.createElement('div');
