@@ -585,6 +585,53 @@ export async function getCourseActivity(courseId: string): Promise<ICourseActivi
   };
 }
 
+// ── Teacher: per-student performance (teacher-only, via RPC) ─
+
+export interface IStudentPerformance {
+  user_id: string;
+  display_name: string;
+  points: number;
+  notebooksCompleted: number;
+  cellsAttempted: number;
+  cellsFirstTry: number;
+  firstTryPct: number;
+  lastActive: string | null;
+}
+
+/**
+ * Each enrolled student's performance for the teacher's course. The RPC is
+ * SECURITY DEFINER and only returns rows to the course's teacher (or for the
+ * seeded demo course), so student identities never leak to classmates.
+ */
+export async function getCourseStudentPerformance(
+  courseId: string
+): Promise<IStudentPerformance[]> {
+  const client = getClient();
+  if (!client) {
+    return [];
+  }
+  const { data, error } = await client.rpc('get_course_student_performance', {
+    p_course_id: courseId
+  });
+  if (error || !data) {
+    return [];
+  }
+  return (data as any[]).map(r => {
+    const attempted = Number(r.cells_attempted) || 0;
+    const firstTry = Number(r.cells_first_try) || 0;
+    return {
+      user_id: r.user_id,
+      display_name: r.display_name ?? 'Student',
+      points: Number(r.points) || 0,
+      notebooksCompleted: Number(r.notebooks_completed) || 0,
+      cellsAttempted: attempted,
+      cellsFirstTry: firstTry,
+      firstTryPct: attempted > 0 ? Math.round((firstTry / attempted) * 100) : 0,
+      lastActive: r.last_active ?? null
+    };
+  });
+}
+
 // ── Teacher: anonymous aggregate cell failure stats ──────────
 
 export interface ICellFailStat {

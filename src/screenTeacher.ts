@@ -34,10 +34,12 @@ import {
   deleteCourseNotebook,
   getCellFailStats,
   getCourseActivity,
+  getCourseStudentPerformance,
   getCellComments,
   upsertTeacherNote,
   ICellFailStat,
-  ICourseActivity
+  ICourseActivity,
+  IStudentPerformance
 } from './supabaseDB';
 import { isConnected } from './supabase';
 
@@ -259,8 +261,9 @@ function renderOverview(host: HTMLElement): void {
 
   void Promise.all([
     getCellFailStats(courseId).catch(() => [] as ICellFailStat[]),
-    getCourseActivity(courseId).catch(() => null)
-  ]).then(([cellStats, activity]) => {
+    getCourseActivity(courseId).catch(() => null),
+    getCourseStudentPerformance(courseId).catch(() => [] as IStudentPerformance[])
+  ]).then(([cellStats, activity, students]) => {
     loading.remove();
     const act: ICourseActivity = activity ?? {
       submissionCount: 0,
@@ -270,11 +273,11 @@ function renderOverview(host: HTMLElement): void {
       recent: []
     };
 
-    if (cellStats.length === 0 && act.submissionCount === 0) {
+    if (cellStats.length === 0 && act.submissionCount === 0 && students.length === 0) {
       host.appendChild(
         analyticsEmpty(
           'No student activity yet',
-          'Aggregate analytics appear here once students join with your invite code and work through notebooks in Learn mode.'
+          'Analytics appear here once students join with your invite code and work through notebooks in Learn mode.'
         )
       );
       return;
@@ -282,18 +285,35 @@ function renderOverview(host: HTMLElement): void {
 
     const struggles = toStruggleRows(cellStats);
     const highStruggle = struggles.filter(s => s.struggle >= 50).length;
+    const enrolled = students.length;
+
+    // Prefer figures derived from the per-student data (teacher-scoped RPC),
+    // falling back to the aggregate activity when that's all we have.
+    const totalAttempted = students.reduce((a, s) => a + s.cellsAttempted, 0);
+    const totalFirstTry = students.reduce((a, s) => a + s.cellsFirstTry, 0);
+    const avgFirstTry =
+      totalAttempted > 0
+        ? Math.round((totalFirstTry / totalAttempted) * 100)
+        : act.avgFirstTryPct;
+    const submissions =
+      students.reduce((a, s) => a + s.notebooksCompleted, 0) || act.submissionCount;
 
     // KPI tiles
     const stats = document.createElement('div');
     stats.style.cssText =
       'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
-    stats.appendChild(kpiTile(String(act.activeStudents), 'Active students', 'submitted a notebook'));
-    stats.appendChild(kpiTile(`${act.avgFirstTryPct}%`, 'Avg first-try rate', 'across submissions'));
-    stats.appendChild(kpiTile(String(act.submissionCount), 'Submissions', 'notebook runs completed'));
+    stats.appendChild(kpiTile(String(enrolled || act.activeStudents), 'Students', 'enrolled in this course'));
+    stats.appendChild(kpiTile(`${avgFirstTry}%`, 'Avg first-try rate', 'across notebooks'));
+    stats.appendChild(kpiTile(String(submissions), 'Submissions', 'notebook runs completed'));
     stats.appendChild(
       kpiTile(String(highStruggle), 'High-struggle cells', 'need your attention', 'var(--yellow-500)')
     );
     host.appendChild(stats);
+
+    // Per-student roster + performance bars (real students, teacher-only).
+    if (students.length > 0) {
+      host.appendChild(studentsCard(students));
+    }
 
     // Struggle (left, wide) + Topic mastery (right) — only when we have per-cell data.
     if (struggles.length > 0) {
@@ -305,13 +325,86 @@ function renderOverview(host: HTMLElement): void {
       host.appendChild(grid);
     }
 
-    // AI insights — grounded in the real per-cell data.
-    host.appendChild(insightsCard(struggles, act));
+    // AI insights — grounded in the real per-cell + per-student data.
+    host.appendChild(insightsCard(struggles, act, students));
   });
 }
 
+/** Roster of enrolled students with per-student performance bars. */
+function studentsCard(students: IStudentPerformance[]): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px';
+
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:8px';
+  head.innerHTML =
+    '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Students</span>' +
+    `<span style="font-size:11.5px;color:var(--text-tertiary)">${students.length} enrolled · ranked by XP</span>`;
+  card.appendChild(head);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:2px';
+
+  students.forEach((s, i) => {
+    const active = s.cellsAttempted > 0;
+    const row = document.createElement('div');
+    row.style.cssText =
+      'display:grid;grid-template-columns:20px minmax(0,1.4fr) minmax(0,1fr) auto;align-items:center;gap:12px;padding:8px 6px;border-radius:6px;transition:background-color var(--dur-fast) var(--ease-out)';
+    row.addEventListener('mouseenter', () => (row.style.background = 'rgba(0,0,0,0.03)'));
+    row.addEventListener('mouseleave', () => (row.style.background = 'transparent'));
+
+    const rank = document.createElement('span');
+    rank.style.cssText =
+      'font-size:11px;font-weight:600;color:var(--text-quaternary);font-family:var(--font-mono);text-align:right';
+    rank.textContent = String(i + 1);
+    row.appendChild(rank);
+
+    const who = document.createElement('div');
+    who.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:0';
+    const name = document.createElement('span');
+    name.style.cssText =
+      'font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    name.textContent = s.display_name;
+    who.appendChild(name);
+    const sub = document.createElement('span');
+    sub.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+    sub.textContent = active
+      ? `${s.notebooksCompleted} notebook${s.notebooksCompleted === 1 ? '' : 's'} · ${s.firstTryPct}% first-try`
+      : 'No activity yet';
+    who.appendChild(sub);
+    row.appendChild(who);
+
+    // First-try rate bar (green→yellow→red by level).
+    const barWrap = document.createElement('div');
+    barWrap.style.cssText =
+      'height:7px;border-radius:99px;background:var(--bg-panel);overflow:hidden;border:1px solid var(--border-subtle)';
+    const bar = document.createElement('div');
+    const pct = active ? s.firstTryPct : 0;
+    const color =
+      pct >= 75 ? 'var(--green-400)' : pct >= 45 ? 'var(--yellow-500)' : 'var(--red-400)';
+    bar.style.cssText = `height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width var(--dur-slow) var(--ease-out)`;
+    barWrap.appendChild(bar);
+    row.appendChild(barWrap);
+
+    const xp = document.createElement('span');
+    xp.style.cssText =
+      'font-size:12px;font-weight:600;color:var(--accent-text);font-family:var(--font-mono);white-space:nowrap;text-align:right;min-width:52px';
+    xp.textContent = `${s.points} XP`;
+    row.appendChild(xp);
+
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+  return card;
+}
+
 /** Build a real data context string for the AI from the aggregates. */
-function buildInsightsContext(rows: IStruggleRow[], act: ICourseActivity): string {
+function buildInsightsContext(
+  rows: IStruggleRow[],
+  act: ICourseActivity,
+  students: IStudentPerformance[] = []
+): string {
   const perf = rows.length
     ? rows
         .map(
@@ -320,24 +413,68 @@ function buildInsightsContext(rows: IStruggleRow[], act: ICourseActivity): strin
         )
         .join('\n')
     : '(no per-cell data yet)';
-  return `Class: ${act.activeStudents} active students, ${act.submissionCount} notebook submissions, avg first-try ${act.avgFirstTryPct}%.\n\nPer-cell first-try success (worst first):\n${perf}`;
+  const roster = students.length
+    ? students
+        .map(
+          s =>
+            `- ${s.display_name}: ${s.points} XP, ${s.notebooksCompleted} notebook(s), ${s.firstTryPct}% first-try`
+        )
+        .join('\n')
+    : '(no enrolled students yet)';
+  const struggling = students.filter(s => s.cellsAttempted > 0 && s.firstTryPct < 50);
+  const strugglingLine = struggling.length
+    ? `\n\nStudents who may need support (first-try < 50%): ${struggling
+        .map(s => s.display_name)
+        .join(', ')}.`
+    : '';
+  return `Class: ${students.length || act.activeStudents} students, ${act.submissionCount} notebook submissions, avg first-try ${act.avgFirstTryPct}%.\n\nPer-student performance (by XP):\n${roster}${strugglingLine}\n\nPer-cell first-try success (worst first):\n${perf}`;
 }
 
 /** A locally-computed real summary, shown when AI isn't configured. */
-function localInsights(rows: IStruggleRow[]): string {
+function localInsights(
+  rows: IStruggleRow[],
+  students: IStudentPerformance[] = []
+): string {
+  const struggling = students
+    .filter(s => s.cellsAttempted > 0 && s.firstTryPct < 50)
+    .slice(0, 5);
+  const idle = students.filter(s => s.cellsAttempted === 0);
+  const studentBlock =
+    students.length > 0
+      ? `## Students to watch\n\n` +
+        (struggling.length
+          ? struggling
+              .map(s => `- **${s.display_name}** — ${s.firstTryPct}% first-try over ${s.notebooksCompleted} notebook(s).`)
+              .join('\n')
+          : 'Everyone active is above a 50% first-try rate — nice.') +
+        (idle.length
+          ? `\n\n${idle.length} enrolled student(s) haven’t started yet: ${idle
+              .map(s => s.display_name)
+              .join(', ')}.`
+          : '') +
+        '\n\n'
+      : '';
+
   if (rows.length === 0) {
-    return 'Students have submitted notebooks, but there isn’t enough per-cell data yet to pinpoint where they struggle. Encourage more Learn-mode practice.';
+    return (
+      studentBlock +
+      'There isn’t enough per-cell data yet to pinpoint where students struggle. Encourage more Learn-mode practice.'
+    );
   }
   const worst = rows.slice(0, 3);
   const lines = worst
     .map(r => `- **${r.label}** — ${r.firstTryPct}% first-try over ${r.attempts} attempt(s).`)
     .join('\n');
-  return `## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
+  return `${studentBlock}## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
 }
 
 /** AI-insights card with a real-data fallback + the "ask" chat. */
-function insightsCard(rows: IStruggleRow[], act: ICourseActivity): HTMLElement {
-  const context = buildInsightsContext(rows, act);
+function insightsCard(
+  rows: IStruggleRow[],
+  act: ICourseActivity,
+  students: IStudentPerformance[] = []
+): HTMLElement {
+  const context = buildInsightsContext(rows, act, students);
   const aiCard = document.createElement('div');
   aiCard.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px';
@@ -352,7 +489,7 @@ function insightsCard(rows: IStruggleRow[], act: ICourseActivity): HTMLElement {
 
   const insHost = document.createElement('div');
   insHost.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
-  insHost.appendChild(renderMarkdown(localInsights(rows)));
+  insHost.appendChild(renderMarkdown(localInsights(rows, students)));
   aiCard.appendChild(insHost);
 
   // Upgrade to an AI-written report when a key is configured — still grounded
