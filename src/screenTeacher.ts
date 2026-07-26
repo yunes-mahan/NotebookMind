@@ -963,35 +963,43 @@ function weekAdmin(
   spacer.style.cssText = 'flex:1;min-width:12px';
   head.appendChild(spacer);
 
-  const editBtn = button(tEditWeek.has(w.week) ? 'Close' : 'Edit', 'ghost');
-  editBtn.style.height = 'var(--control-sm)';
-  editBtn.style.fontSize = '12px';
+  const editing = tEditWeek.has(w.week);
+  // Primary edit toggle stays visible (unified pill); Delete week hides in ⋮.
+  const editBtn = document.createElement('button');
+  editBtn.style.cssText = [
+    'display:inline-flex;align-items:center;gap:6px;height:var(--control-sm);box-sizing:border-box',
+    'padding:0 11px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;font-family:var(--font-sans)',
+    'border:1px solid;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)',
+    editing
+      ? 'background:var(--accent-subtle-bg);color:var(--accent-text);border-color:transparent'
+      : 'background:var(--bg-panel);color:var(--text-secondary);border-color:var(--border-default)'
+  ].join(';');
+  editBtn.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>' +
+    `<span>${editing ? 'Close' : 'Edit week'}</span>`;
   editBtn.addEventListener('click', () => {
-    if (tEditWeek.has(w.week)) tEditWeek.delete(w.week);
+    if (editing) tEditWeek.delete(w.week);
     else tEditWeek.add(w.week);
     repaint();
   });
   head.appendChild(editBtn);
 
-  let delArmed = false;
-  const delBtn = button('Delete week', 'ghost');
-  delBtn.style.height = 'var(--control-sm)';
-  delBtn.style.fontSize = '12px';
-  delBtn.style.color = 'var(--red-400)';
-  delBtn.addEventListener('click', () => {
-    if (!delArmed) {
-      delArmed = true;
-      delBtn.textContent = 'Confirm delete';
-      delBtn.style.background = 'var(--red-bg)';
-      return;
-    }
-    const idx = COURSE.weeks.findIndex(x => x.week === w.week);
-    if (idx >= 0) COURSE.weeks.splice(idx, 1);
-    tEditWeek.delete(w.week);
-    renumberWeeks(COURSE);
-    repaint();
-  });
-  head.appendChild(delBtn);
+  head.appendChild(
+    makeKebab([
+      {
+        label: 'Delete week',
+        danger: true,
+        confirm: true,
+        onClick: () => {
+          const idx = COURSE.weeks.findIndex(x => x.week === w.week);
+          if (idx >= 0) COURSE.weeks.splice(idx, 1);
+          tEditWeek.delete(w.week);
+          renumberWeeks(COURSE);
+          repaint();
+        }
+      }
+    ])
+  );
   box.appendChild(head);
 
   // Edit panel: theme + topics
@@ -1189,7 +1197,92 @@ async function loadCells(
   return null;
 }
 
-/** One notebook row: status · title · state · Lock/Unlock · Tasks ▾ · Delete. */
+interface IKebabItem {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  confirm?: boolean; // two-step (arm → "Confirm — …") for destructive actions
+}
+
+/**
+ * A compact "⋮" overflow menu that hides secondary/destructive row actions
+ * without removing them. Matches the row's control height so it lines up with
+ * the primary buttons (Edit tasks, Lock).
+ */
+function makeKebab(items: IKebabItem[]): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative;flex:0 0 auto;display:inline-flex';
+
+  const trigger = document.createElement('button');
+  trigger.title = 'More actions';
+  trigger.style.cssText = [
+    'display:inline-flex;align-items:center;justify-content:center;height:var(--control-sm);width:var(--control-sm)',
+    'box-sizing:border-box;border-radius:7px;cursor:pointer;color:var(--text-tertiary)',
+    'background:var(--bg-panel);border:1px solid var(--border-default);transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)'
+  ].join(';');
+  trigger.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="12" cy="19" r="1.6"></circle></svg>';
+
+  const pop = document.createElement('div');
+  pop.style.cssText = [
+    'position:absolute;top:calc(var(--control-sm) + 4px);right:0;min-width:168px;z-index:60;display:none',
+    'flex-direction:column;gap:1px;padding:5px;background:var(--bg-elevated)',
+    'border:1px solid var(--border-default);border-radius:9px;box-shadow:0 8px 28px rgba(0,0,0,0.13)'
+  ].join(';');
+
+  const onOutside = (e: MouseEvent): void => {
+    if (!wrap.contains(e.target as Node)) {
+      pop.style.display = 'none';
+      document.removeEventListener('mousedown', onOutside);
+    }
+  };
+  trigger.addEventListener('click', () => {
+    const open = pop.style.display !== 'none';
+    pop.style.display = open ? 'none' : 'flex';
+    if (open) {
+      document.removeEventListener('mousedown', onOutside);
+    } else {
+      setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    }
+  });
+
+  items.forEach(it => {
+    const row = document.createElement('button');
+    const baseColor = it.danger ? 'var(--red-400)' : 'var(--text-secondary)';
+    row.style.cssText = [
+      'display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;cursor:pointer',
+      'font-size:12.5px;font-weight:500;font-family:var(--font-sans);text-align:left;width:100%',
+      `background:transparent;border:none;color:${baseColor};transition:background-color var(--dur-fast) var(--ease-out)`
+    ].join(';');
+    row.textContent = it.label;
+    row.addEventListener('mouseenter', () => {
+      row.style.background = it.danger ? 'var(--red-bg)' : 'var(--accent-subtle-bg)';
+    });
+    row.addEventListener('mouseleave', () => {
+      row.style.background = 'transparent';
+    });
+    let armed = false;
+    row.addEventListener('click', () => {
+      if (it.confirm && !armed) {
+        armed = true;
+        row.textContent = `Confirm — ${it.label.toLowerCase()}`;
+        row.style.color = 'var(--red-400)';
+        row.style.background = 'var(--red-bg)';
+        return;
+      }
+      pop.style.display = 'none';
+      document.removeEventListener('mousedown', onOutside);
+      it.onClick();
+    });
+    pop.appendChild(row);
+  });
+
+  wrap.appendChild(trigger);
+  wrap.appendChild(pop);
+  return wrap;
+}
+
+/** One notebook row: status · title · timing · Edit tasks · Lock/Unlock · ⋮ */
 function nbAdminRow(
   nb: ReturnType<typeof activeData>['notebooks'][string],
   w: ICourseWeek,
@@ -1311,16 +1404,28 @@ function nbAdminRow(
   });
   row.appendChild(tasksBtn);
 
-  const stateLbl = document.createElement('span');
-  stateLbl.style.cssText =
-    'font-size:11.5px;font-weight:500;white-space:nowrap;flex:0 0 auto;color:' +
-    (locked ? (sched ? 'var(--accent-text)' : 'var(--text-quaternary)') : 'var(--green-400)');
-  stateLbl.textContent = locked ? (sched ? 'Scheduled' : 'Locked') : 'Unlocked';
-  row.appendChild(stateLbl);
-
-  const toggleBtn = button(locked ? 'Unlock' : 'Lock', 'secondary');
-  toggleBtn.style.height = 'var(--control-sm)';
-  toggleBtn.style.fontSize = '12px';
+  // Release state + toggle merged into one control: the button shows the
+  // current state and flips it on click (no separate status label).
+  const unlocked = !locked;
+  const lockOpenSvg =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>';
+  const lockClosedSvg =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.title = unlocked
+    ? 'Unlocked — click to lock (hide from students)'
+    : 'Locked — click to unlock (release to students)';
+  toggleBtn.style.cssText = [
+    'display:inline-flex;align-items:center;gap:6px;height:var(--control-sm);box-sizing:border-box',
+    'padding:0 11px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;font-family:var(--font-sans)',
+    'border:1px solid;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)',
+    unlocked
+      ? 'background:rgba(23,138,84,0.10);color:var(--green-400);border-color:rgba(23,138,84,0.30)'
+      : 'background:var(--bg-panel);color:var(--text-secondary);border-color:var(--border-default)'
+  ].join(';');
+  toggleBtn.innerHTML =
+    (unlocked ? lockOpenSvg : lockClosedSvg) +
+    `<span>${unlocked ? 'Unlocked' : 'Locked'}</span>`;
   toggleBtn.addEventListener('click', () => {
     nb.status = locked ? 'available' : 'locked';
     tSchedules.delete(nb.id);
@@ -1333,30 +1438,28 @@ function nbAdminRow(
   });
   row.appendChild(toggleBtn);
 
-  let delArmed = false;
-  const delBtn = button('Delete', 'ghost');
-  delBtn.style.height = 'var(--control-sm)';
-  delBtn.style.fontSize = '12px';
-  delBtn.style.color = 'var(--red-400)';
-  delBtn.addEventListener('click', () => {
-    if (!delArmed) {
-      delArmed = true;
-      delBtn.textContent = 'Confirm';
-      delBtn.style.background = 'var(--red-bg)';
-      return;
-    }
-    w.notebookIds = w.notebookIds.filter(id => id !== nb.id);
-    delete COURSE.notebooks[nb.id];
-    uploadedDocs.delete(nb.id);
-    tSchedules.delete(nb.id);
-    tExpand.delete(nb.id);
-    const cid = activeBackendCourseId();
-    if (isConnected() && cid) {
-      void deleteCourseNotebook(cid, nb.id).catch(() => undefined);
-    }
-    repaint();
-  });
-  row.appendChild(delBtn);
+  // Destructive action tucked into the overflow menu (kept, just hidden).
+  row.appendChild(
+    makeKebab([
+      {
+        label: 'Delete notebook',
+        danger: true,
+        confirm: true,
+        onClick: () => {
+          w.notebookIds = w.notebookIds.filter(id => id !== nb.id);
+          delete COURSE.notebooks[nb.id];
+          uploadedDocs.delete(nb.id);
+          tSchedules.delete(nb.id);
+          tExpand.delete(nb.id);
+          const cid = activeBackendCourseId();
+          if (isConnected() && cid) {
+            void deleteCourseNotebook(cid, nb.id).catch(() => undefined);
+          }
+          repaint();
+        }
+      }
+    ])
+  );
   wrap.appendChild(row);
 
   // ── Practice tasks panel (opened by clicking the notebook name) ──
