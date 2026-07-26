@@ -23,9 +23,12 @@ Write-Host "==> [3/6] Installing JS dependencies"
 Write-Host "==> [4/6] Building the extension (TypeScript -> bundle)"
 & .\venv\Scripts\jlpm.exe run build
 
-Write-Host "==> [5/6] Installing the Python package + linking the extension"
+Write-Host "==> [5/6] Installing the Python package (registers the extension)"
 & .\venv\Scripts\pip.exe install -e .
-& .\venv\Scripts\jupyter.exe labextension develop . --overwrite | Out-Null
+# Best-effort live-reload link for older JupyterLab; harmless if it no-ops on
+# newer versions (pip install -e . already registers the extension).
+try { & .\venv\Scripts\jupyter.exe labextension develop . --overwrite 2>$null | Out-Null }
+catch { Write-Host "    (dev-link step skipped - extension already installed via pip)" }
 
 Write-Host "==> [6/6] Configuring the backend (.env)"
 if (Test-Path .env) {

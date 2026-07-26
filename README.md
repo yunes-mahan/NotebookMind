@@ -67,8 +67,9 @@ pip install jupyterlab
 # 4) Build the extension (frontend) and install it in dev mode
 jlpm install                        # JS dependencies (jlpm ships with JupyterLab)
 jlpm run build                      # TypeScript -> lib/ , then bundle -> notebookmind/labextension/
-pip install -e .                    # install the Python package + server extension
-jupyter labextension develop . --overwrite
+pip install -e .                    # installs the Python package AND registers the extension
+# Optional (older JupyterLab, live-reload link — safe to skip / may no-op):
+# jupyter labextension develop . --overwrite
 
 # 5) Configure the backend (Supabase) — turnkey, values are public-safe
 cp .env.example .env                # Windows: copy .env.example .env

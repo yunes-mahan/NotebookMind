@@ -21,9 +21,12 @@ echo "==> [3/6] Installing JS dependencies"
 echo "==> [4/6] Building the extension (TypeScript -> bundle)"
 ./venv/bin/jlpm run build
 
-echo "==> [5/6] Installing the Python package + linking the extension"
+echo "==> [5/6] Installing the Python package (registers the extension)"
 ./venv/bin/pip install -q -e .
-./venv/bin/jupyter labextension develop . --overwrite >/dev/null
+# Best-effort live-reload link for older JupyterLab; harmless if it no-ops on
+# newer versions (pip install -e . already registers the extension).
+./venv/bin/jupyter labextension develop . --overwrite >/dev/null 2>&1 \
+  || echo "    (dev-link step skipped — extension already installed via pip)"
 
 echo "==> [6/6] Configuring the backend (.env)"
 if [ -f .env ]; then
