@@ -102,12 +102,12 @@ Disposable accounts on the shared Supabase project (the publishable/anon key in
 | **Teacher** | `notebookmind.prof@gmail.com` | `Teacher123!` |
 | **Student** | `notebookmind.student@gmail.com` | `Student123!` |
 
-**Demo course:** *Data Analysis with Python* — **invite code `DEMO2025`**.
+**Demo course:** *Data Science Fundamentals* (code `DS101`) — **invite code `DEMO2025`**.
 The teacher owns it; the student (and 7 seeded classmates) are enrolled.
 
 **Seeded classmates** (so the leaderboard & analytics show live data): Alice, Priya,
 Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
-`Test123456!`, all enrolled in the demo course.
+`Student123!`, all enrolled in the demo course.
 
 > Sign in with these accounts — **no signup needed**. (Creating a brand-new account
 > triggers a confirmation email, which is rate-limited on the shared project.)
@@ -122,6 +122,12 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
   challenges (earns XP, records telemetry) or **Explain** to read cell-by-cell.
   Open **Leaderboard** to see the course ranking. Join another course with an
   **invite code** from the sidebar course switcher.
+- **Friends & sharing:** **Leaderboard → Friends & profile** → add a friend by their
+  email. Comparing stats is **opt-in and mutual** — you only see each other's XP once
+  **both** of you share; either side can withdraw at any time.
+- **Account:** **Edit profile** updates your name/photo (persists across reloads). The
+  same dialog has a **Delete account** danger zone that permanently removes your account
+  and all your data.
 - **Local, no backend:** on the Course screen, **"Bring your own notebook"** lets you
   upload any `.ipynb` and learn it — works with no account/DB.
 
@@ -129,13 +135,18 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
 Everything above — **accounts, courses, data storage, leaderboard, teacher analytics,
 Learn/Explain** — works with **no AI key**: challenges, explanations, quizzes and
 insights fall back to deterministic built-in output. To test **real LLM generation**,
-add your own key to `.env` and restart:
+**open the `.env` file you created in step 5** (in the project root, next to
+`README.md`), set the key on the `GEMINI_API_KEY` line, save, and restart JupyterLab:
 
 ```bash
+# .env  — the server (notebookmind/config.py) reads this and passes it to the app
 GEMINI_API_KEY=your_google_ai_studio_key     # free tier: https://aistudio.google.com/apikey
-# or an Anthropic key instead:
+# …or paste an Anthropic key on the same line instead (auto-detected):
 # GEMINI_API_KEY=sk-ant-...
 ```
+
+(The same `.env` holds `SUPABASE_URL` / `SUPABASE_ANON_KEY`, already filled in from
+`.env.example`. An optional `ELEVENLABS_API_KEY` line enables text-to-speech.)
 
 We intentionally do **not** ship an AI key — provider keys are billable and must not be
 committed. A free Gemini key takes ~2 minutes to create.
@@ -144,18 +155,58 @@ committed. A free Gemini key takes ~2 minutes to create.
 
 ## 4. Run the backend tests
 
-The suite exercises the real Supabase backend (login, create/join course, XP sync,
-course leaderboard, documents, notes, flashcards, teacher analytics, slide authoring),
-printing PASS/FAIL per feature and exiting non-zero on failure.
+`test-backend.js` exercises the **real Supabase backend** with the same
+`@supabase/supabase-js` client the app uses, printing PASS/FAIL/SKIP per feature and
+exiting non-zero on failure (so it can gate a commit or CI). It self-cleans after
+itself (throwaway course, docs, friend links, avatar restore).
 
 ```bash
 node test-backend.js
 ```
 
-Expected: **all checks pass** (a couple may **SKIP** — the signup check skips when
-Supabase's hourly confirmation-email limit is hit, and the live AI check skips unless
-an AI key is set). It reads the shared project + test accounts by default; override
-with `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `NM_TEACHER_EMAIL/PW`, `NM_STUDENT_EMAIL/PW`.
+**What it covers** (22 sections, ~70 checks):
+
+- **Auth** — sign in, invalid-credentials rejected, sign up
+- **Profiles & roles**, and **profile edit persistence** (display name + avatar survive reload)
+- **Courses** — create, read back, **join by invite code**
+- **Teacher dashboard** — a student who joins **appears on the professor's dashboard**
+  with real **performance** (attempts, first-try %), plus **per-topic understanding**;
+  a non-teacher is correctly denied that data
+- **XP / points** sync, and the **opt-in, course-scoped leaderboard**
+- **Documents**, **section notes**, **flashcards** (SM-2 review persists)
+- **Cell attempts** + teacher struggle aggregate, **notebook submissions**, **week slides**
+- **Course notebook sync** (teacher publishes content → enrolled student loads it)
+- **Explain-mode notes & comments** persist (teacher notes + peer comments)
+- **AI challenge cache** (a generated challenge reloads without re-running the AI)
+- **Personal file upload** to the account (appears in *My materials*, survives reload)
+- **Friend requests & sharing** — send by email, one-directional (stats hidden) →
+  accept → mutual (stats visible) → withdraw; unknown-email and self-request rejected
+- **Delete account** — full round-trip: create a throwaway user, delete via the RPC,
+  verify it's gone and can no longer sign in (see the DB note below)
+- **AI generation** — a live LLM completion (needs an AI key)
+
+**Run everything, including the live AI + destructive delete tests:**
+
+```bash
+# macOS / Linux
+GEMINI_API_KEY=your_key \
+NM_DB_URL="postgresql://postgres:<PASSWORD>@db.<ref>.supabase.co:5432/postgres" \
+node test-backend.js
+```
+
+Expected: **all checks pass**. A few may **SKIP**, which is normal:
+
+- *Sign up* skips when Supabase's hourly confirmation-email limit is hit (a project
+  throttle, not a failure) — or set `NM_TEST_SIGNUP=0` to skip it deliberately.
+- *AI generation* skips unless `GEMINI_API_KEY` (or an `sk-ant-…` Anthropic key) is set.
+- *Delete account (destructive round-trip)* skips unless a direct Postgres URL is given
+  via **`NM_DB_URL`** (or `DATABASE_URL`) — the public anon key can't create the
+  confirmed throwaway user the test needs. Without it, the suite still verifies the
+  `delete_my_account` RPC is deployed (a safe, non-destructive probe).
+- *Local (on-device) upload* is IndexedDB — browser-only, so it's verified in the UI.
+
+It targets the shared project + test accounts by default; override with
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `NM_TEACHER_EMAIL/PW`, `NM_STUDENT_EMAIL/PW`.
 
 ---
 
@@ -179,8 +230,8 @@ webpack bundle — running only the bundle step does **not** pick up `.ts` edits
 |-------|-------|------|
 | Frontend | `src/*.ts` | Screens (home, learn, explain, reader, teacher, leaderboard), course store, XP, Gemini/Anthropic calls |
 | Server ext | `notebookmind/` | Serves API keys + Supabase config to the frontend (`/notebookmind/config`), reads a local `.env` |
-| Backend | Supabase (Postgres) | `profiles`, `courses`, `course_enrollments`, `course_weeks`, `course_notebooks`, `documents`, `section_notes`, `flashcards`, `quiz_sessions`, `point_events`, `notebook_submissions`, `cell_attempts`, `cell_comments`, `notebook_challenges`; RPCs `get_course_leaderboard`, `join_course_by_invite`, `increment_points`, `get_course_student_performance`, `get_course_topic_stats` |
-| DB setup | `supabase-migration.sql` + `migration2.sql … migration17.sql` | Schema + RLS + grants + RPCs (already applied to the shared project) |
+| Backend | Supabase (Postgres) | `profiles`, `courses`, `course_enrollments`, `course_weeks`, `course_notebooks`, `documents`, `section_notes`, `flashcards`, `quiz_sessions`, `point_events`, `notebook_submissions`, `cell_attempts`, `cell_comments`, `notebook_challenges`, `friend_shares`; RPCs `get_course_leaderboard`, `join_course_by_invite`, `increment_points`, `get_course_student_performance`, `get_course_topic_stats`, `request_friend`, `get_my_friends`, `delete_my_account` |
+| DB setup | `supabase-migration.sql` + `migration2.sql … migration19.sql` | Schema + RLS + grants + RPCs (already applied to the shared project) |
 | Seed | `seed-demo.js`, `seed-comments.js` | Fake classmates + demo-course activity, and seeded Explain-mode comments |
 
 The Supabase schema is **already provisioned** on the shared project, so reviewers do

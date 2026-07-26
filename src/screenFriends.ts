@@ -2,13 +2,46 @@ import { NotebookMindApp } from './nbApp';
 import { button, avatar, maxWidth, pageHeader, tag } from './uiKit';
 import { MATES, invited, profile } from './friendsData';
 import { openProfileModal } from './profileModal';
+import { isConnected } from './supabase';
+import {
+  getFriends,
+  sendFriendRequest,
+  shareWith,
+  stopSharing,
+  IFriend
+} from './supabaseDB';
 
-/** Friends & profile — prototype screen (reached from the Leaderboard). */
+interface IRowSpec {
+  stateLabel: string;
+  stateTone: 'success' | 'warning' | 'accent' | 'neutral';
+  btnLabel: string;
+  btnVariant: 'primary' | 'secondary';
+  highlight: boolean;
+}
+
+/** Consent flags → how the row reads and what its action button does. */
+function specFor(iShare: boolean, theyShare: boolean): IRowSpec {
+  if (iShare && theyShare) {
+    return { stateLabel: 'Sharing both ways', stateTone: 'success', btnLabel: 'Stop sharing', btnVariant: 'secondary', highlight: false };
+  }
+  if (iShare && !theyShare) {
+    return { stateLabel: 'You shared — waiting for them', stateTone: 'warning', btnLabel: 'Withdraw request', btnVariant: 'secondary', highlight: false };
+  }
+  if (!iShare && theyShare) {
+    return { stateLabel: 'Wants to compare with you', stateTone: 'accent', btnLabel: 'Accept & share back', btnVariant: 'primary', highlight: true };
+  }
+  return { stateLabel: 'Not sharing', stateTone: 'neutral', btnLabel: 'Share my stats', btnVariant: 'secondary', highlight: false };
+}
+
+/** Friends & profile — reached from the Leaderboard. Backed by Supabase when
+ *  connected (friend_shares + request_friend/get_my_friends RPCs), or a local
+ *  session mock in demo mode. */
 export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
   const root = maxWidth(host, 680);
   root.style.cssText +=
     ';display:flex;flex-direction:column;gap:22px;padding-bottom:32px';
 
+  const connected = isConnected();
   const repaint = (): void => {
     host.innerHTML = '';
     renderFriends(host, app);
@@ -60,7 +93,7 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
     addInput.style.borderColor = 'var(--border-default)';
     addInput.style.boxShadow = 'none';
   });
-  const addBtn = button('Send invite', 'secondary');
+  const addBtn = button(connected ? 'Send request' : 'Send invite', 'secondary');
   addBtn.style.height = '38px';
   addRow.appendChild(addInput);
   addRow.appendChild(addBtn);
@@ -68,32 +101,9 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
   const addNotice = document.createElement('span');
   addNotice.style.cssText = 'font-size:12px;color:var(--green-400);min-height:15px';
   addWrap.appendChild(addNotice);
-
-  const doInvite = (): void => {
-    const v = addInput.value.trim();
-    if (!v) return;
-    if (!v.includes('@')) {
-      addNotice.style.color = 'var(--red-400)';
-      addNotice.textContent = 'Enter a full email address, e.g. mika@university.edu.';
-      return;
-    }
-    const name = v
-      .split('@')[0]
-      .replace(/[._]/g, ' ')
-      .replace(/\b\w/g, c => c.toUpperCase());
-    invited.push({ name, email: v });
-    addInput.value = '';
-    addNotice.style.color = 'var(--green-400)';
-    addNotice.textContent = `Invite sent to ${name} — they'll appear here once they join, and you can share stats with each other.`;
-    paintMates();
-  };
-  addBtn.addEventListener('click', doInvite);
-  addInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') doInvite();
-  });
   root.appendChild(addWrap);
 
-  // ── Friends & sharing ─────────────────────────────────────────
+  // ── Friends & sharing list ────────────────────────────────────
   const listWrap = document.createElement('div');
   listWrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   listWrap.innerHTML =
@@ -105,102 +115,179 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
   listWrap.appendChild(listBox);
   root.appendChild(listWrap);
 
-  interface IRowSpec {
-    stateLabel: string;
-    stateTone: 'success' | 'warning' | 'accent' | 'neutral';
-    btnLabel: string;
-    btnVariant: 'primary' | 'secondary';
-    highlight: boolean;
-  }
+  const emptyState = (msg: string): void => {
+    listBox.innerHTML = `<div style="padding:22px 16px;font-size:13px;color:var(--text-tertiary);text-align:center">${msg}</div>`;
+  };
 
-  function paintMates(): void {
-    listBox.innerHTML = '';
-    MATES.forEach((m, idx) => {
-      let spec: IRowSpec;
-      if (m.me && m.them) {
-        spec = {
-          stateLabel: 'Sharing both ways',
-          stateTone: 'success',
-          btnLabel: 'Stop sharing',
-          btnVariant: 'secondary',
-          highlight: false
-        };
-      } else if (m.me && !m.them) {
-        spec = {
-          stateLabel: 'You shared — waiting for them',
-          stateTone: 'warning',
-          btnLabel: 'Withdraw request',
-          btnVariant: 'secondary',
-          highlight: false
-        };
-      } else if (!m.me && m.them) {
-        spec = {
-          stateLabel: 'Wants to compare with you',
-          stateTone: 'accent',
-          btnLabel: 'Accept & share back',
-          btnVariant: 'primary',
-          highlight: true
-        };
-      } else {
-        spec = {
-          stateLabel: 'Not sharing',
-          stateTone: 'neutral',
-          btnLabel: 'Share my stats',
-          btnVariant: 'secondary',
-          highlight: false
-        };
+  // One friend row with an async action button.
+  const makeRow = (opts: {
+    name: string;
+    avatarUrl?: string | null;
+    spec: IRowSpec;
+    substats?: string;
+    first: boolean;
+    onAction: () => Promise<void> | void;
+  }): HTMLElement => {
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 16px;${opts.first ? '' : 'border-top:1px solid var(--border-subtle);'}${opts.spec.highlight ? 'background:var(--accent-subtle-bg)' : ''}`;
+    row.appendChild(avatar(opts.name, 30, opts.avatarUrl ?? ''));
+    const col = document.createElement('div');
+    col.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
+    const nameEl = document.createElement('span');
+    nameEl.style.cssText = 'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    nameEl.textContent = opts.name;
+    col.appendChild(nameEl);
+    col.appendChild(tag(opts.spec.stateLabel, opts.spec.stateTone, true));
+    if (opts.substats) {
+      const s = document.createElement('span');
+      s.style.cssText = 'font-size:11.5px;color:var(--text-tertiary)';
+      s.textContent = opts.substats;
+      col.appendChild(s);
+    }
+    row.appendChild(col);
+    const action = button(opts.spec.btnLabel, opts.spec.btnVariant);
+    action.style.height = 'var(--control-sm)';
+    action.style.fontSize = '12px';
+    action.addEventListener('click', async () => {
+      action.disabled = true;
+      await opts.onAction();
+    });
+    row.appendChild(action);
+    return row;
+  };
+
+  if (connected) {
+    // ── Real backend mode ──
+    const doRequest = async (): Promise<void> => {
+      const v = addInput.value.trim();
+      if (!v) {
+        return;
       }
-
-      const row = document.createElement('div');
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 16px;${idx > 0 ? 'border-top:1px solid var(--border-subtle);' : ''}${spec.highlight ? 'background:var(--accent-subtle-bg)' : ''}`;
-      row.appendChild(avatar(m.name, 30));
-      const col = document.createElement('div');
-      col.style.cssText =
-        'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
-      const nameEl = document.createElement('span');
-      nameEl.style.cssText =
-        'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-      nameEl.textContent = m.name;
-      col.appendChild(nameEl);
-      col.appendChild(tag(spec.stateLabel, spec.stateTone, true));
-      row.appendChild(col);
-
-      const action = button(spec.btnLabel, spec.btnVariant);
-      action.style.height = 'var(--control-sm)';
-      action.style.fontSize = '12px';
-      action.addEventListener('click', () => {
-        m.me = !m.me;
-        paintMates();
-      });
-      row.appendChild(action);
-      listBox.appendChild(row);
+      if (!v.includes('@')) {
+        addNotice.style.color = 'var(--red-400)';
+        addNotice.textContent = 'Enter a full email address, e.g. mika@university.edu.';
+        return;
+      }
+      addBtn.disabled = true;
+      const res = await sendFriendRequest(v);
+      addBtn.disabled = false;
+      if (!res) {
+        addNotice.style.color = 'var(--red-400)';
+        addNotice.textContent = 'No Runcell account found for that email (or it’s your own).';
+        return;
+      }
+      addInput.value = '';
+      addNotice.style.color = 'var(--green-400)';
+      addNotice.textContent = `Request sent to ${res.displayName} — they’ll appear below. You’ll see their stats once they share back.`;
+      void loadAndPaint();
+    };
+    addBtn.addEventListener('click', () => void doRequest());
+    addInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') void doRequest();
     });
 
-    invited.forEach((f, i) => {
-      const row = document.createElement('div');
-      row.style.cssText =
-        'display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--border-subtle)';
-      row.appendChild(avatar(f.name, 30));
-      const col = document.createElement('div');
-      col.style.cssText =
-        'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
-      const nameEl = document.createElement('span');
-      nameEl.style.cssText =
-        'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-      nameEl.textContent = f.name;
-      col.appendChild(nameEl);
-      col.appendChild(tag('Invited · waiting to join', 'neutral', true));
-      row.appendChild(col);
-      const cancel = button('Cancel invite', 'secondary');
-      cancel.style.height = 'var(--control-sm)';
-      cancel.style.fontSize = '12px';
-      cancel.addEventListener('click', () => {
-        invited.splice(i, 1);
-        paintMates();
+    const loadAndPaint = async (): Promise<void> => {
+      emptyState('Loading…');
+      const friends: IFriend[] = await getFriends();
+      if (!friends.length) {
+        emptyState('No friends yet. Add someone by their university email above.');
+        return;
+      }
+      listBox.innerHTML = '';
+      friends.forEach((f, idx) => {
+        const spec = specFor(f.iShare, f.theyShare);
+        const mutual = f.iShare && f.theyShare;
+        listBox.appendChild(
+          makeRow({
+            name: f.displayName,
+            avatarUrl: f.avatarUrl,
+            spec,
+            substats: mutual
+              ? `${f.points} XP · ${f.notebooksCompleted} notebooks · ${f.firstTryPct}% first-try`
+              : undefined,
+            first: idx === 0,
+            onAction: async () => {
+              if (f.iShare) {
+                await stopSharing(f.friendId); // stop sharing / withdraw
+              } else {
+                await shareWith(f.friendId); // accept & share back
+              }
+              await loadAndPaint();
+            }
+          })
+        );
       });
-      row.appendChild(cancel);
-      listBox.appendChild(row);
+    };
+    void loadAndPaint();
+  } else {
+    // ── Demo (session-only) mode ──
+    const doInvite = (): void => {
+      const v = addInput.value.trim();
+      if (!v) {
+        return;
+      }
+      if (!v.includes('@')) {
+        addNotice.style.color = 'var(--red-400)';
+        addNotice.textContent = 'Enter a full email address, e.g. mika@university.edu.';
+        return;
+      }
+      const name = v
+        .split('@')[0]
+        .replace(/[._]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+      invited.push({ name, email: v });
+      addInput.value = '';
+      addNotice.style.color = 'var(--green-400)';
+      addNotice.textContent = `Invite sent to ${name} — they'll appear here once they join, and you can share stats with each other.`;
+      paintMates();
+    };
+    addBtn.addEventListener('click', doInvite);
+    addInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') doInvite();
     });
+
+    const paintMates = (): void => {
+      listBox.innerHTML = '';
+      MATES.forEach((m, idx) => {
+        const spec = specFor(m.me, m.them);
+        listBox.appendChild(
+          makeRow({
+            name: m.name,
+            spec,
+            first: idx === 0,
+            onAction: () => {
+              m.me = !m.me;
+              paintMates();
+            }
+          })
+        );
+      });
+      invited.forEach((f, i) => {
+        const row = document.createElement('div');
+        row.style.cssText =
+          'display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--border-subtle)';
+        row.appendChild(avatar(f.name, 30));
+        const col = document.createElement('div');
+        col.style.cssText =
+          'display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0';
+        const nameEl = document.createElement('span');
+        nameEl.style.cssText =
+          'max-width:100%;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        nameEl.textContent = f.name;
+        col.appendChild(nameEl);
+        col.appendChild(tag('Invited · waiting to join', 'neutral', true));
+        row.appendChild(col);
+        const cancel = button('Cancel invite', 'secondary');
+        cancel.style.height = 'var(--control-sm)';
+        cancel.style.fontSize = '12px';
+        cancel.addEventListener('click', () => {
+          invited.splice(i, 1);
+          paintMates();
+        });
+        row.appendChild(cancel);
+        listBox.appendChild(row);
+      });
+    };
+    paintMates();
   }
-  paintMates();
 }

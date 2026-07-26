@@ -17,6 +17,9 @@
  *   NM_TEACHER_EMAIL, NM_TEACHER_PW, NM_STUDENT_EMAIL, NM_STUDENT_PW
  *   GEMINI_API_KEY  or  ANTHROPIC_API_KEY   → enables the live AI-generation test
  *   NM_TEST_SIGNUP=0                        → skip creating a throwaway signup account
+ *   NM_DB_URL (or DATABASE_URL)             → direct Postgres URL; enables the real
+ *                                             destructive delete-account round-trip
+ *                                             (creates + deletes a throwaway user)
  *
  * Notes on cleanup: documents (→ cascades to notes + flashcards), course_weeks and
  * courses created by this suite are deleted at the end. cell_attempts /
@@ -441,8 +444,302 @@ async function main() {
     skip('Course weeks & slides', tempCourseId ? 'no teacher session' : 'no temp course');
   }
 
-  // ── 14. AI generation ──────────────────────────────────────────────────
-  section('14. AI generation');
+  // ── 14. Teacher dashboard: enrolled student & real performance ─────────
+  // The headline flow: a student joins the professor's course by invite, does
+  // some work, and must then show up — with real numbers — on the professor's
+  // dashboard (get_course_student_performance + get_course_topic_stats RPCs).
+  section('14. Teacher dashboard — student appears + performance');
+  if (teacherOk && studentOk && tempCourseId) {
+    const codeRow = await sbTeacher.from('courses').select('invite_code').eq('id', tempCourseId).single();
+    const inviteCode = codeRow.data?.invite_code;
+    const joined = await sbStudent.rpc('join_course_by_invite', { p_code: inviteCode });
+    const didJoin = !joined.error && Array.isArray(joined.data) && joined.data[0]?.id === tempCourseId;
+    check('Student can join the professor’s new course by invite', didJoin, joined.error ? joined.error.message : `course=${joined.data?.[0]?.name}`);
+
+    // Student completes a notebook — this is what drives the dashboard numbers.
+    const subErr = (await sbStudent.from('notebook_submissions').insert({
+      user_id: studentId, course_id: tempCourseId, notebook_key: 'perf_nb',
+      notebook_title: 'Intro to Pandas', xp_earned: 30, cells_attempted: 6, cells_first_try: 3
+    })).error;
+    check('Student’s completed notebook is recorded in the course', !subErr, subErr ? subErr.message : '');
+
+    // Professor dashboard — per-student performance (migration 15).
+    const perf = await sbTeacher.rpc('get_course_student_performance', { p_course_id: tempCourseId });
+    const mine = Array.isArray(perf.data) ? perf.data.find(r => r.user_id === studentId) : null;
+    check('Enrolled student appears on the professor dashboard', !perf.error && !!mine, perf.error ? perf.error.message : `students=${perf.data?.length}`);
+    check('Student performance (attempts + first-try) shown to professor', !!mine && Number(mine.cells_attempted) >= 6 && Number(mine.cells_first_try) >= 3, mine ? `attempted=${mine.cells_attempted} firstTry=${mine.cells_first_try}` : 'student missing');
+    check('Dashboard first-try % computes correctly', !!mine && Number(mine.cells_attempted) > 0 && Math.round((Number(mine.cells_first_try) / Number(mine.cells_attempted)) * 100) === 50, mine ? `pct=${Math.round((Number(mine.cells_first_try) / Math.max(1, Number(mine.cells_attempted))) * 100)}` : '');
+
+    // Professor dashboard — per-topic understanding (migration 17).
+    const topics = await sbTeacher.rpc('get_course_topic_stats', { p_course_id: tempCourseId });
+    const topic = Array.isArray(topics.data) ? topics.data.find(t => t.topic === 'Intro to Pandas') : null;
+    check('Per-topic understanding aggregate available to professor', !topics.error && !!topic, topics.error ? topics.error.message : `topics=${topics.data?.length}`);
+    check('Topic understood_pct aggregates the first-try rate', !!topic && Number(topic.understood_pct) === 50, topic ? `understood=${topic.understood_pct}%` : '');
+
+    // Privacy: a non-teacher must NOT read a course's per-student performance.
+    const leak = await sbStudent.rpc('get_course_student_performance', { p_course_id: tempCourseId });
+    check('Non-teacher cannot read per-student performance (privacy)', !leak.error && Array.isArray(leak.data) && leak.data.length === 0, leak.error ? leak.error.message : `leaked ${leak.data?.length} rows`);
+    // Enrollment + submissions live in the throwaway course → gone on course delete.
+  } else {
+    skip('Teacher dashboard — student appears + performance', tempCourseId ? 'missing a session' : 'no temp course');
+  }
+
+  // ── 15. Profile edit persistence (name + avatar) ───────────────────────
+  // "Edit profile" must survive a reload (migration 12 added profiles.avatar_url).
+  section('15. Profile edit persistence (name + avatar)');
+  if (studentOk) {
+    const before = (await sbStudent.from('profiles').select('display_name,avatar_url').eq('user_id', studentId).single()).data;
+    const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const upErr = (await sbStudent.from('profiles').update({ avatar_url: avatar }).eq('user_id', studentId)).error;
+    check('Profile avatar update accepted (migration 12 column exists)', !upErr, upErr ? upErr.message : '');
+    const after = (await sbStudent.from('profiles').select('avatar_url').eq('user_id', studentId).single()).data;
+    check('Avatar persists (reads back after reload)', after?.avatar_url === avatar, after?.avatar_url ? 'stored' : 'missing');
+    // Restore the original avatar so we don't disturb the shared test account.
+    cleanup.push(async () => { await sbStudent.from('profiles').update({ avatar_url: before?.avatar_url ?? null }).eq('user_id', studentId); });
+  } else {
+    skip('Profile edit persistence', 'no student session');
+  }
+
+  // ── 16. Course notebook content sync (teacher → student) ────────────────
+  // Migration 13: teacher publishes a notebook's cells+challenges onto the course
+  // and enrolled students load that exact content from the DB.
+  section('16. Course notebook sync (teacher → student)');
+  if (teacherOk && studentOk && tempCourseId) {
+    const content = { cells: ['print("hello")'], challenges: { 0: { kind: 'mc' } } };
+    const up = await sbTeacher.from('course_notebooks').upsert(
+      { course_id: tempCourseId, nb_key: 'nb_sync', title: 'Synced NB', blurb: null, status: 'available', week_number: 1, display_order: 0, content },
+      { onConflict: 'course_id,nb_key' }
+    );
+    check('Teacher can publish notebook content to the course', !up.error, up.error ? up.error.message : '');
+    const stu = await sbStudent.from('course_notebooks').select('nb_key,title,content,week_number').eq('course_id', tempCourseId).eq('nb_key', 'nb_sync').single();
+    const okContent = !stu.error && stu.data?.content && Array.isArray(stu.data.content.cells) && stu.data.content.cells.length === 1;
+    check('Enrolled student loads the teacher’s notebook content', okContent, stu.error ? stu.error.message : `cells=${stu.data?.content?.cells?.length}`);
+  } else {
+    skip('Course notebook sync', tempCourseId ? 'missing a session' : 'no temp course');
+  }
+
+  // ── 17. Explain-mode notes & comments persistence ──────────────────────
+  // Migration 16 restored the grant that lets teacher notes + student comments
+  // actually save (they were 403-ing before). They must persist across reloads.
+  section('17. Explain-mode notes & comments persistence');
+  if (teacherOk && studentOk && tempCourseId) {
+    const noteBody = 'Focus on broadcasting — ' + rand(4);
+    await sbTeacher.from('cell_comments').delete()
+      .eq('user_id', teacherId).eq('course_id', tempCourseId)
+      .eq('notebook_key', 'nb_sync').eq('cell_index', 0).eq('role', 'teacher');
+    const insNote = await sbTeacher.from('cell_comments').insert({
+      user_id: teacherId, course_id: tempCourseId, notebook_key: 'nb_sync', cell_index: 0,
+      role: 'teacher', author_name: null, body: noteBody
+    });
+    check('Teacher note saves (migration 16 grant restored)', !insNote.error, insNote.error ? insNote.error.message : '');
+
+    const seen = await sbStudent.from('cell_comments').select('role,body').eq('course_id', tempCourseId).eq('notebook_key', 'nb_sync').eq('cell_index', 0);
+    const hasNote = !seen.error && (seen.data || []).some(c => c.role === 'teacher' && c.body === noteBody);
+    check('Enrolled student sees the teacher note (persists on reload)', hasNote, seen.error ? seen.error.message : `rows=${seen.data?.length}`);
+
+    const insC = await sbStudent.from('cell_comments').insert({
+      user_id: studentId, course_id: tempCourseId, notebook_key: 'nb_sync', cell_index: 0,
+      role: 'student', author_name: 'Test Student', body: 'I struggled here too'
+    });
+    check('Student can post a peer comment', !insC.error, insC.error ? insC.error.message : '');
+    // cell_comments FK is ON DELETE CASCADE from courses → cleaned with the course.
+  } else {
+    skip('Explain-mode notes & comments', tempCourseId ? 'missing a session' : 'no temp course');
+  }
+
+  // ── 18. Learn-mode AI challenge cache (no re-generation on reload) ──────
+  // Migration 11 + the migration-16 grant: a generated challenge is cached per
+  // (user, notebook, cell) so a reload reuses it instead of paying the AI again.
+  section('18. Learn-mode AI challenge cache');
+  if (studentOk) {
+    const payload = { kind: 'fix_the_bug', prompt: 'fix it', buggy: 'x =', answer: 'x = 1' };
+    const up = await sbStudent.from('notebook_challenges').upsert(
+      { user_id: studentId, notebook_key: 'nb_cache', cell_index: 0, payload },
+      { onConflict: 'user_id,notebook_key,cell_index' }
+    );
+    check('Generated challenge caches to the account (migration 16 grant)', !up.error, up.error ? up.error.message : '');
+    const back = await sbStudent.from('notebook_challenges').select('payload').eq('user_id', studentId).eq('notebook_key', 'nb_cache').eq('cell_index', 0).single();
+    const ok = !back.error && back.data?.payload?.kind === 'fix_the_bug';
+    check('Cached challenge reloads unchanged (no AI re-run)', ok, back.error ? back.error.message : 'ok');
+    cleanup.push(async () => { await sbStudent.from('notebook_challenges').delete().eq('user_id', studentId).eq('notebook_key', 'nb_cache'); });
+  } else {
+    skip('Learn-mode AI challenge cache', 'no student session');
+  }
+
+  // ── 19. Personal file upload (synced to account) ───────────────────────
+  // Uploading a PDF/notebook to *your account* → documents (is_course_material
+  // = false). It must appear in "My materials" and survive a reload. (Uploads
+  // kept "on this device" use IndexedDB — browser-only, not reachable from Node;
+  // see the SKIP note below.)
+  section('19. Personal file upload (synced to account)');
+  if (studentOk) {
+    const ins = await sbStudent.from('documents').insert({
+      user_id: studentId, title: '__nmtest_upload.pdf', source_text: 'uploaded text',
+      original_full_text: 'uploaded text',
+      parts: [{ index: 0, title: 'Page 1', text: 'page one', pageNumber: 1 }],
+      total_sections: 1, is_course_material: false, doc_type: 'paper',
+      last_opened_at: new Date().toISOString()
+    }).select('id').single();
+    const upId = ins.data?.id ?? null;
+    check('User can upload a personal file to their account', !ins.error && !!upId, ins.error ? ins.error.message : '');
+    if (upId) {
+      cleanup.push(async () => { await sbStudent.from('documents').delete().eq('id', upId); });
+      const list = await sbStudent.from('documents').select('id,title,doc_type').eq('user_id', studentId).eq('is_course_material', false);
+      const found = !list.error && (list.data || []).some(d => d.id === upId);
+      check('Uploaded file appears in “My materials” and survives reload', found, list.error ? list.error.message : `count=${list.data?.length}`);
+    }
+    skip('Local (on-device) upload round-trip', 'IndexedDB store (localStore.ts) is browser-only — verify in the UI');
+  } else {
+    skip('Personal file upload', 'no student session');
+  }
+
+  // ── 20. Friend requests / sharing (consent-based, migration 18) ─────────
+  // End-to-end: student sends a request to the teacher by email → one-directional
+  // (stats hidden) → teacher accepts → mutual (stats visible) → student withdraws.
+  section('20. Friend requests & sharing');
+  if (teacherOk && studentOk) {
+    // Start from a clean slate between these two accounts.
+    await sbStudent.from('friend_shares').delete().eq('owner_id', studentId).eq('friend_id', teacherId);
+    await sbTeacher.from('friend_shares').delete().eq('owner_id', teacherId).eq('friend_id', studentId);
+
+    // Student sends a friend request (shares stats) to the teacher by email.
+    const req = await sbStudent.rpc('request_friend', { p_email: TEACHER.email });
+    const reqOk = !req.error && Array.isArray(req.data) && req.data[0]?.friend_id === teacherId;
+    check('Send friend request by email (request_friend RPC)', reqOk, req.error ? req.error.message : `to=${req.data?.[0]?.display_name}`);
+
+    // Student's view: outgoing request pending, stats still hidden.
+    const f1 = await sbStudent.rpc('get_my_friends');
+    const row1 = Array.isArray(f1.data) ? f1.data.find(r => r.friend_id === teacherId) : null;
+    check('Outgoing request shows (i_share=true, they_share=false)', !!row1 && row1.i_share === true && row1.they_share === false, row1 ? `i=${row1.i_share} they=${row1.they_share}` : 'missing');
+    check('Friend stats stay hidden until sharing is mutual', !!row1 && Number(row1.points) === 0 && Number(row1.notebooks_completed) === 0, row1 ? `points=${row1.points}` : '');
+
+    // Teacher's view: an incoming request they can accept.
+    const tf = await sbTeacher.rpc('get_my_friends');
+    const trow = Array.isArray(tf.data) ? tf.data.find(r => r.friend_id === studentId) : null;
+    check('Teacher sees the incoming request (they_share=true, i_share=false)', !!trow && trow.they_share === true && trow.i_share === false, trow ? `i=${trow.i_share} they=${trow.they_share}` : 'missing');
+
+    // Teacher accepts by sharing back (direct insert — how the UI's "Accept" works).
+    const acc = await sbTeacher.from('friend_shares').insert({ owner_id: teacherId, friend_id: studentId });
+    check('Accept & share back (insert own friend_shares row)', !acc.error, acc.error ? acc.error.message : '');
+
+    // Now mutual → the student can see the teacher's real stats.
+    const f2 = await sbStudent.rpc('get_my_friends');
+    const row2 = Array.isArray(f2.data) ? f2.data.find(r => r.friend_id === teacherId) : null;
+    check('Mutual sharing unlocks the friend on both sides', !!row2 && row2.i_share && row2.they_share, row2 ? `i=${row2.i_share} they=${row2.they_share}` : 'missing');
+    check('Friend stats become visible once mutual (persist on reload)', !!row2 && !!row2.display_name && Number(row2.points) >= 0, row2 ? `name=${row2.display_name} pts=${row2.points}` : '');
+
+    // Negative: a request to an unknown email adds nobody.
+    const bogus = await sbStudent.rpc('request_friend', { p_email: `no.one.${rand(6).toLowerCase()}@gmail.com` });
+    check('Request to an unknown email adds nobody', !bogus.error && Array.isArray(bogus.data) && bogus.data.length === 0, bogus.error ? bogus.error.message : `rows=${bogus.data?.length}`);
+
+    // Negative: you can't friend yourself.
+    const self = await sbStudent.rpc('request_friend', { p_email: STUDENT.email });
+    check('Cannot send a friend request to yourself', !self.error && Array.isArray(self.data) && self.data.length === 0, self.error ? self.error.message : `rows=${self.data?.length}`);
+
+    // Student takes their sharing back (unfriend / withdraw).
+    const del = await sbStudent.from('friend_shares').delete().eq('owner_id', studentId).eq('friend_id', teacherId);
+    check('Withdraw sharing (delete own friend_shares row)', !del.error, del.error ? del.error.message : '');
+    const f3 = await sbStudent.rpc('get_my_friends');
+    const row3 = Array.isArray(f3.data) ? f3.data.find(r => r.friend_id === teacherId) : null;
+    check('After withdrawing, I no longer share (they still do)', !!row3 && row3.i_share === false && row3.they_share === true, row3 ? `i=${row3.i_share} they=${row3.they_share}` : 'row gone');
+
+    // RLS: I can see a share directed at me (the teacher→student row remains).
+    const peek = await sbStudent.from('friend_shares').select('id').eq('owner_id', teacherId).eq('friend_id', studentId);
+    check('RLS lets me read shares directed to me', !peek.error && Array.isArray(peek.data) && peek.data.length === 1, peek.error ? peek.error.message : `rows=${peek.data?.length}`);
+
+    // Clean up both directions.
+    cleanup.push(async () => {
+      await sbStudent.from('friend_shares').delete().eq('owner_id', studentId).eq('friend_id', teacherId);
+      await sbTeacher.from('friend_shares').delete().eq('owner_id', teacherId).eq('friend_id', studentId);
+    });
+  } else {
+    skip('Friend requests & sharing', 'need both teacher and student sessions');
+  }
+
+  // ── 21. Delete account (self-service, migration 19) ────────────────────
+  // Real, destructive round-trip on a THROWAWAY account (never the shared test
+  // accounts): create a confirmed user directly in the DB, sign in as them, call
+  // delete_my_account, then verify the auth.users row is gone and they can no
+  // longer sign in. Needs a direct DB connection (the anon key can't create a
+  // confirmed user); without one we fall back to a safe existence probe.
+  section('21. Delete account');
+  {
+    const DB_URL = process.env.NM_DB_URL || process.env.DATABASE_URL || '';
+    let pg = null;
+    try { pg = require('pg'); } catch { pg = null; }
+
+    if (DB_URL && pg) {
+      const dbc = new pg.Client({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } });
+      const email = `nm.deltest.${Date.now()}.${rand(4).toLowerCase()}@gmail.com`;
+      const password = 'Del123!' + rand(6);
+      let newId = null;
+      try {
+        await dbc.connect();
+        const ins = await dbc.query(
+          `insert into auth.users
+             (instance_id,id,aud,role,email,encrypted_password,email_confirmed_at,
+              raw_app_meta_data,raw_user_meta_data,created_at,updated_at,
+              confirmation_token,recovery_token,email_change_token_new,email_change,
+              email_change_token_current,reauthentication_token)
+           values
+             ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),'authenticated','authenticated',
+              $1,crypt($2,gen_salt('bf')),now(),
+              '{"provider":"email","providers":["email"]}',jsonb_build_object('display_name','Del Test'),now(),now(),
+              '','','','','','')
+           returning id`,
+          [email, password]
+        );
+        newId = ins.rows[0].id;
+        await dbc.query(
+          `insert into auth.identities (provider_id,user_id,identity_data,provider,last_sign_in_at,created_at,updated_at)
+           values ($1::text,$1::uuid,jsonb_build_object('sub',$1::text,'email',$2::text),'email',now(),now(),now())`,
+          [newId, email]
+        );
+        check('Throwaway account created for the delete test', !!newId, `id=${newId}`);
+
+        // Sign in as the throwaway user via the public anon client.
+        const sbDel = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
+        const login = await loginWithRetry(sbDel, email, password);
+        check('Throwaway account can sign in', !!login.data?.user?.id, login.error ? login.error.message : email);
+
+        // Give it a row that must disappear on delete (proves the cascade).
+        await sbDel.from('documents').insert({
+          user_id: newId, title: '__deltest_doc', source_text: 'x', original_full_text: 'x',
+          parts: [{ index: 0, title: 'S', text: 'x' }], total_sections: 1, last_opened_at: new Date().toISOString()
+        });
+
+        // Delete via the RPC — acting as the user themselves.
+        const del = await sbDel.rpc('delete_my_account');
+        check('delete_my_account RPC succeeds for the caller', !del.error, del.error ? del.error.message : 'deleted');
+
+        const gone = await dbc.query('select 1 from auth.users where id=$1', [newId]);
+        check('Account removed from auth.users', gone.rowCount === 0, `rows=${gone.rowCount}`);
+
+        const profGone = await dbc.query('select 1 from public.profiles where user_id=$1', [newId]);
+        check('Profile + owned data cascade-deleted', profGone.rowCount === 0, `profiles=${profGone.rowCount}`);
+
+        const relogin = await loginWithRetry(createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } }), email, password, 2);
+        check('Deleted account can no longer sign in', !!relogin.error, relogin.error ? relogin.error.message : 'STILL SIGNS IN (BAD)');
+
+        newId = null; // successfully deleted — nothing to clean up
+      } catch (e) {
+        check('Delete account end-to-end', false, e.message);
+      } finally {
+        if (newId) { try { await dbc.query('delete from auth.users where id=$1', [newId]); } catch { /* ignore */ } }
+        try { await dbc.end(); } catch { /* ignore */ }
+      }
+    } else {
+      // Safe existence probe: an unauthenticated call must raise (not "no such
+      // function"), which proves the RPC is deployed without deleting anyone.
+      const r = await sbAnon.rpc('delete_my_account');
+      const notFound = r.error && /could not find|not find the function|does not exist|schema cache/i.test(r.error.message);
+      check('delete_my_account RPC is deployed', !notFound, notFound ? 'NOT FOUND — apply migration19.sql' : (r.error ? `guarded (${r.error.message})` : 'callable'));
+      skip('Delete account (destructive round-trip)', 'set NM_DB_URL (or DATABASE_URL) to create+delete a throwaway user');
+    }
+  }
+
+  // ── 22. AI generation ──────────────────────────────────────────────────
+  section('22. AI generation');
   if (!AI_KEY) {
     skip('AI generation (live)', 'set GEMINI_API_KEY or ANTHROPIC_API_KEY to enable');
   } else {

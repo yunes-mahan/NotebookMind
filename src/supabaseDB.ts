@@ -45,6 +45,107 @@ export async function setLeaderboardOptIn(optIn: boolean): Promise<void> {
   await updateProfile({ leaderboard_opt_in: optIn });
 }
 
+// ── Friends (consent-based stat sharing, migration 18) ───────
+
+export interface IFriend {
+  friendId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  iShare: boolean; // I share my stats with them
+  theyShare: boolean; // they share their stats with me
+  points: number; // only meaningful when mutual (else 0)
+  notebooksCompleted: number;
+  firstTryPct: number;
+}
+
+/** My friends with consent flags and (mutual-only) stats, via get_my_friends RPC. */
+export async function getFriends(): Promise<IFriend[]> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return [];
+  }
+  const { data, error } = await client.rpc('get_my_friends');
+  if (error || !data) {
+    return [];
+  }
+  return (data as any[]).map(r => ({
+    friendId: r.friend_id,
+    displayName: r.display_name ?? 'Student',
+    avatarUrl: r.avatar_url ?? null,
+    iShare: !!r.i_share,
+    theyShare: !!r.they_share,
+    points: Number(r.points) || 0,
+    notebooksCompleted: Number(r.notebooks_completed) || 0,
+    firstTryPct: Number(r.first_try_pct) || 0
+  }));
+}
+
+/**
+ * Send a friend request / share my stats with the user at this email (also how
+ * you "accept & share back"). Returns the friend's profile, or null if the email
+ * is unknown or is yourself.
+ */
+export async function sendFriendRequest(
+  email: string
+): Promise<{ friendId: string; displayName: string } | null> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return null;
+  }
+  const { data, error } = await client.rpc('request_friend', { p_email: email });
+  if (error || !Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+  return { friendId: data[0].friend_id, displayName: data[0].display_name ?? 'Student' };
+}
+
+/**
+ * Share my stats with a friend I already know the id of (accept an incoming
+ * request / share back). RLS lets me insert only my own outgoing row.
+ */
+export async function shareWith(friendId: string): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client
+    .from('friend_shares')
+    .insert({ owner_id: user.id, friend_id: friendId });
+}
+
+/** Take back my sharing with a friend (delete my outgoing friend_shares row). */
+export async function stopSharing(friendId: string): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client
+    .from('friend_shares')
+    .delete()
+    .eq('owner_id', user.id)
+    .eq('friend_id', friendId);
+}
+
+// ── Account deletion (migration 19) ──────────────────────────
+
+/**
+ * Permanently delete the signed-in user's own account and all their data via the
+ * delete_my_account RPC (SECURITY DEFINER). Returns true on success.
+ */
+export async function deleteMyAccount(): Promise<boolean> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return false;
+  }
+  const { error } = await client.rpc('delete_my_account');
+  return !error;
+}
+
 // ── XP / Points ──────────────────────────────────────────────
 
 export async function addPoints(

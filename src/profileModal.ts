@@ -1,7 +1,7 @@
-import { profile, setProfile } from './friendsData';
+import { profile, setProfile, clearUser } from './friendsData';
 import { avatar, button, celebrate } from './uiKit';
-import { isConnected } from './supabase';
-import { updateProfile } from './supabaseDB';
+import { isConnected, signOut } from './supabase';
+import { updateProfile, deleteMyAccount } from './supabaseDB';
 
 /**
  * Shared "Edit profile" dialog (prototype style) — upload/replace a profile
@@ -113,6 +113,67 @@ export function openProfileModal(onSaved?: () => void): void {
   actions.appendChild(cancel);
   actions.appendChild(save);
   cardEl.appendChild(actions);
+
+  // ── Danger zone: delete account (connected accounts only) ─────
+  if (isConnected()) {
+    const danger = document.createElement('div');
+    danger.style.cssText =
+      'margin-top:6px;padding-top:14px;border-top:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:8px';
+    const dangerLbl = document.createElement('span');
+    dangerLbl.style.cssText = 'font-size:12px;font-weight:600;color:var(--red-400)';
+    dangerLbl.textContent = 'Delete account';
+    danger.appendChild(dangerLbl);
+
+    const dangerHint = document.createElement('span');
+    dangerHint.style.cssText = 'font-size:12px;color:var(--text-tertiary);line-height:1.45';
+    dangerHint.textContent =
+      'Permanently removes your account and all your data (courses, notes, flashcards, XP). This cannot be undone.';
+    danger.appendChild(dangerHint);
+
+    const delBtn = button('Delete my account', 'ghost');
+    delBtn.style.height = 'var(--control-sm)';
+    delBtn.style.color = 'var(--red-400)';
+    delBtn.style.alignSelf = 'flex-start';
+
+    // Two-step confirm inline (no blocking window.confirm dialog).
+    const confirmRow = document.createElement('div');
+    confirmRow.style.cssText = 'display:none;gap:8px';
+    const confirmBtn = button('Yes, delete forever', 'primary');
+    confirmBtn.style.height = 'var(--control-sm)';
+    confirmBtn.style.background = 'var(--red-400)';
+    const keepBtn = button('Keep account', 'secondary');
+    keepBtn.style.height = 'var(--control-sm)';
+    confirmRow.appendChild(confirmBtn);
+    confirmRow.appendChild(keepBtn);
+
+    delBtn.addEventListener('click', () => {
+      delBtn.style.display = 'none';
+      confirmRow.style.display = 'flex';
+    });
+    keepBtn.addEventListener('click', () => {
+      confirmRow.style.display = 'none';
+      delBtn.style.display = '';
+    });
+    confirmBtn.addEventListener('click', async () => {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting…';
+      const ok = await deleteMyAccount();
+      if (!ok) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Yes, delete forever';
+        err.textContent = 'Could not delete the account. Please try again.';
+        return;
+      }
+      await signOut();
+      clearUser();
+      // Full reload drops back to the login screen with the account gone.
+      window.location.reload();
+    });
+
+    danger.appendChild(delBtn);
+    danger.appendChild(confirmRow);
+    cardEl.appendChild(danger);
+  }
 
   const dispose = (): void => overlay.remove();
   cancel.addEventListener('click', dispose);
