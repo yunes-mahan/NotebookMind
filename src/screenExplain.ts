@@ -79,10 +79,10 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   function makeCellRow(i: number, code: string, wide: boolean): HTMLElement {
     const row = document.createElement('div');
     row.style.cssText = wide
-      ? 'display:grid;grid-template-columns:150px minmax(0,980px) 150px;gap:12px;justify-content:center;align-items:start'
+      ? 'display:grid;grid-template-columns:160px minmax(0,780px) 160px;gap:12px;justify-content:center;align-items:start'
       : 'display:grid;grid-template-columns:minmax(0,780px);gap:0;justify-content:center;align-items:start';
     if (wide) row.appendChild(marginColumn(i, 'L'));
-    row.appendChild(makeCellCard(i, code, wide));
+    row.appendChild(makeCellCard(i, code));
     if (wide) row.appendChild(marginColumn(i, 'R'));
     return row;
   }
@@ -159,16 +159,10 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   }
 
   // ── Cell card ─────────────────────────────────────────────────
-  function makeCellCard(i: number, code: string, wide = false): HTMLElement {
+  function makeCellCard(i: number, code: string): HTMLElement {
     const card = document.createElement('div');
     card.style.cssText =
       'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;overflow:hidden';
-    // On a wide viewport, show the code + output beside the explanation instead
-    // of stacked, so the reader compares the cell and its meaning side by side.
-    const left = document.createElement('div');
-    left.style.cssText = 'display:flex;flex-direction:column;min-width:0';
-    const right = document.createElement('div');
-    right.style.cssText = 'display:flex;flex-direction:column;min-width:0';
 
     // Header: 01 + title
     const headRow = document.createElement('div');
@@ -184,7 +178,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
     pre.style.cssText =
       'margin:0;padding:12px 16px;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);background:var(--bg-base);overflow-x:auto;white-space:pre';
     pre.textContent = code;
-    left.appendChild(pre);
+    card.appendChild(pre);
 
     // Output band
     const band = document.createElement('div');
@@ -222,7 +216,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       outBox.appendChild(none);
     }
     band.appendChild(outBox);
-    left.appendChild(band);
+    card.appendChild(band);
 
     // ── Insight source switch + panel ───────────────────────────
     const tabsRow = document.createElement('div');
@@ -245,24 +239,8 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
         }
       )
     );
-    right.appendChild(tabsRow);
-    right.appendChild(body);
-
-    if (wide) {
-      // Two columns: code + output | explanation. A divider separates them and
-      // the output band's bottom border is dropped (the column edge stands in).
-      band.style.borderBottom = 'none';
-      const split = document.createElement('div');
-      split.style.cssText =
-        'display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch';
-      right.style.borderLeft = '1px solid var(--border-subtle)';
-      split.appendChild(left);
-      split.appendChild(right);
-      card.appendChild(split);
-    } else {
-      card.appendChild(left);
-      card.appendChild(right);
-    }
+    card.appendChild(tabsRow);
+    card.appendChild(body);
 
     renderTab(body, i);
     return card;
