@@ -632,6 +632,43 @@ export async function getCourseStudentPerformance(
   });
 }
 
+// ── Teacher: per-topic understanding (teacher-only, via RPC) ─
+
+export interface ITopicStat {
+  topic: string;
+  students: number;
+  attempts: number;
+  firstTry: number;
+  understoodPct: number;
+}
+
+/**
+ * Per-topic understanding for the teacher's course, aggregated from real
+ * notebook submissions (topic = notebook title). Teacher-only via a SECURITY
+ * DEFINER RPC (or the demo showcase).
+ */
+export async function getCourseTopicStats(
+  courseId: string
+): Promise<ITopicStat[]> {
+  const client = getClient();
+  if (!client) {
+    return [];
+  }
+  const { data, error } = await client.rpc('get_course_topic_stats', {
+    p_course_id: courseId
+  });
+  if (error || !data) {
+    return [];
+  }
+  return (data as any[]).map(r => ({
+    topic: r.topic ?? 'Untitled',
+    students: Number(r.students) || 0,
+    attempts: Number(r.attempts) || 0,
+    firstTry: Number(r.first_try) || 0,
+    understoodPct: Number(r.understood_pct) || 0
+  }));
+}
+
 // ── Teacher: anonymous aggregate cell failure stats ──────────
 
 export interface ICellFailStat {

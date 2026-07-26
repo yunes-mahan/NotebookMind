@@ -35,11 +35,13 @@ import {
   getCellFailStats,
   getCourseActivity,
   getCourseStudentPerformance,
+  getCourseTopicStats,
   getCellComments,
   upsertTeacherNote,
   ICellFailStat,
   ICourseActivity,
-  IStudentPerformance
+  IStudentPerformance,
+  ITopicStat
 } from './supabaseDB';
 import { isConnected } from './supabase';
 
@@ -262,8 +264,9 @@ function renderOverview(host: HTMLElement): void {
   void Promise.all([
     getCellFailStats(courseId).catch(() => [] as ICellFailStat[]),
     getCourseActivity(courseId).catch(() => null),
-    getCourseStudentPerformance(courseId).catch(() => [] as IStudentPerformance[])
-  ]).then(([cellStats, activity, students]) => {
+    getCourseStudentPerformance(courseId).catch(() => [] as IStudentPerformance[]),
+    getCourseTopicStats(courseId).catch(() => [] as ITopicStat[])
+  ]).then(([cellStats, activity, students, topics]) => {
     loading.remove();
     const act: ICourseActivity = activity ?? {
       submissionCount: 0,
@@ -315,6 +318,12 @@ function renderOverview(host: HTMLElement): void {
       host.appendChild(studentsCard(students));
     }
 
+    // Per-topic understanding — a second graph showing, per topic, what the
+    // class understood (first-try) vs. where they failed.
+    if (topics.length > 0) {
+      host.appendChild(topicUnderstandingCard(topics));
+    }
+
     // Struggle (left, wide) + Topic mastery (right) — only when we have per-cell data.
     if (struggles.length > 0) {
       const grid = document.createElement('div');
@@ -325,8 +334,8 @@ function renderOverview(host: HTMLElement): void {
       host.appendChild(grid);
     }
 
-    // AI insights — grounded in the real per-cell + per-student data.
-    host.appendChild(insightsCard(struggles, act, students));
+    // AI insights — grounded in the real per-cell + per-student + topic data.
+    host.appendChild(insightsCard(struggles, act, students, topics));
   });
 }
 
@@ -399,12 +408,87 @@ function studentsCard(students: IStudentPerformance[]): HTMLElement {
   return card;
 }
 
+/**
+ * Second graph: per-topic understanding. Each topic (a notebook) gets a stacked
+ * bar — green = share understood on the first try, red = share the class failed
+ * — so the teacher sees at a glance which topics are solid and which need work.
+ */
+function topicUnderstandingCard(topics: ITopicStat[]): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText =
+    'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px';
+
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+  head.innerHTML =
+    '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Topic understanding</span>' +
+    '<span style="font-size:11.5px;color:var(--text-tertiary)">first-try mastery per topic · weakest first</span>' +
+    '<span style="flex:1"></span>' +
+    '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-tertiary)"><span style="width:9px;height:9px;border-radius:2px;background:var(--green-400)"></span>Understood</span>' +
+    '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-tertiary)"><span style="width:9px;height:9px;border-radius:2px;background:var(--red-400)"></span>Struggled</span>';
+  card.appendChild(head);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+
+  topics.forEach(t => {
+    const understood = Math.max(0, Math.min(100, t.understoodPct));
+    const failed = 100 - understood;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+
+    const top = document.createElement('div');
+    top.style.cssText = 'display:flex;align-items:baseline;gap:10px';
+    const color =
+      understood >= 75 ? 'var(--green-400)' : understood >= 45 ? 'var(--yellow-500)' : 'var(--red-400)';
+    top.innerHTML =
+      `<span style="flex:1;min-width:0;font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.topic}</span>` +
+      `<span style="flex:0 0 auto;font-size:12px;font-weight:600;font-family:var(--font-mono);color:${color}">${understood}%</span>` +
+      `<span style="flex:0 0 auto;font-size:11px;color:var(--text-quaternary)">${t.students} student${t.students === 1 ? '' : 's'} · ${t.attempts} cells</span>`;
+    row.appendChild(top);
+
+    // Stacked understood/failed bar.
+    const bar = document.createElement('div');
+    bar.style.cssText =
+      'display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--bg-panel);border:1px solid var(--border-subtle)';
+    const g = document.createElement('div');
+    g.style.cssText = `width:${understood}%;background:var(--green-400);transition:width var(--dur-slow) var(--ease-out)`;
+    const r = document.createElement('div');
+    r.style.cssText = `width:${failed}%;background:var(--red-400)`;
+    bar.appendChild(g);
+    bar.appendChild(r);
+    row.appendChild(bar);
+
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+
+  // One-line takeaway pointing at the weakest topic.
+  const weakest = [...topics].sort((a, b) => a.understoodPct - b.understoodPct)[0];
+  if (weakest) {
+    const note = document.createElement('div');
+    note.style.cssText =
+      'font-size:12px;color:var(--text-tertiary);border-top:1px solid var(--border-subtle);padding-top:12px;line-height:1.5';
+    note.innerHTML =
+      `Lowest first-try mastery: <strong style="color:var(--text-secondary)">${weakest.topic}</strong> at ${weakest.understoodPct}% — a good candidate for a recap or an extra worked example.`;
+    card.appendChild(note);
+  }
+  return card;
+}
+
 /** Build a real data context string for the AI from the aggregates. */
 function buildInsightsContext(
   rows: IStruggleRow[],
   act: ICourseActivity,
-  students: IStudentPerformance[] = []
+  students: IStudentPerformance[] = [],
+  topics: ITopicStat[] = []
 ): string {
+  const topicLine = topics.length
+    ? '\n\nPer-topic first-try understanding (weakest first):\n' +
+      topics
+        .map(t => `- ${t.topic}: ${t.understoodPct}% understood over ${t.attempts} cells (${t.students} students)`)
+        .join('\n')
+    : '';
   const perf = rows.length
     ? rows
         .map(
@@ -427,18 +511,27 @@ function buildInsightsContext(
         .map(s => s.display_name)
         .join(', ')}.`
     : '';
-  return `Class: ${students.length || act.activeStudents} students, ${act.submissionCount} notebook submissions, avg first-try ${act.avgFirstTryPct}%.\n\nPer-student performance (by XP):\n${roster}${strugglingLine}\n\nPer-cell first-try success (worst first):\n${perf}`;
+  return `Class: ${students.length || act.activeStudents} students, ${act.submissionCount} notebook submissions, avg first-try ${act.avgFirstTryPct}%.\n\nPer-student performance (by XP):\n${roster}${strugglingLine}${topicLine}\n\nPer-cell first-try success (worst first):\n${perf}`;
 }
 
 /** A locally-computed real summary, shown when AI isn't configured. */
 function localInsights(
   rows: IStruggleRow[],
-  students: IStudentPerformance[] = []
+  students: IStudentPerformance[] = [],
+  topics: ITopicStat[] = []
 ): string {
   const struggling = students
     .filter(s => s.cellsAttempted > 0 && s.firstTryPct < 50)
     .slice(0, 5);
   const idle = students.filter(s => s.cellsAttempted === 0);
+  const weakTopics = [...topics].sort((a, b) => a.understoodPct - b.understoodPct).slice(0, 3);
+  const topicBlock = weakTopics.length
+    ? `## Topics to reteach\n\n` +
+      weakTopics
+        .map(t => `- **${t.topic}** — ${t.understoodPct}% understood on the first try (${t.students} students).`)
+        .join('\n') +
+      '\n\n'
+    : '';
   const studentBlock =
     students.length > 0
       ? `## Students to watch\n\n` +
@@ -458,23 +551,25 @@ function localInsights(
   if (rows.length === 0) {
     return (
       studentBlock +
-      'There isn’t enough per-cell data yet to pinpoint where students struggle. Encourage more Learn-mode practice.'
+      topicBlock +
+      'For per-cell detail, have students work more notebooks in Learn mode.'
     );
   }
   const worst = rows.slice(0, 3);
   const lines = worst
     .map(r => `- **${r.label}** — ${r.firstTryPct}% first-try over ${r.attempts} attempt(s).`)
     .join('\n');
-  return `${studentBlock}## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
+  return `${studentBlock}${topicBlock}## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
 }
 
 /** AI-insights card with a real-data fallback + the "ask" chat. */
 function insightsCard(
   rows: IStruggleRow[],
   act: ICourseActivity,
-  students: IStudentPerformance[] = []
+  students: IStudentPerformance[] = [],
+  topics: ITopicStat[] = []
 ): HTMLElement {
-  const context = buildInsightsContext(rows, act, students);
+  const context = buildInsightsContext(rows, act, students, topics);
   const aiCard = document.createElement('div');
   aiCard.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px';
@@ -489,7 +584,7 @@ function insightsCard(
 
   const insHost = document.createElement('div');
   insHost.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
-  insHost.appendChild(renderMarkdown(localInsights(rows, students)));
+  insHost.appendChild(renderMarkdown(localInsights(rows, students, topics)));
   aiCard.appendChild(insHost);
 
   // Upgrade to an AI-written report when a key is configured — still grounded
