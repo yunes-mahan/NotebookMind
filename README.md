@@ -27,8 +27,28 @@ Check: `python3 --version`, `node --version`, `git --version`.
 
 ## 2. Set up from a fresh clone
 
-These steps work on **macOS / Linux** and **Windows** — only the two marked lines
-differ. Run them from a terminal.
+### Option A — one command (recommended)
+
+Clone, then run the setup script for your OS. It creates the venv, installs
+JupyterLab, builds the extension, links it, and copies `.env` (connected mode).
+
+```bash
+git clone https://github.com/yunes-mahan/NotebookMind.git
+cd NotebookMind && git checkout production
+
+# macOS / Linux:
+./setup.sh   &&  ./run.sh
+
+# Windows (PowerShell):
+#   .\setup.ps1   ;   .\run.ps1
+```
+
+Then open the URL JupyterLab prints and sign in with an account from section 3.
+
+### Option B — manual steps
+
+The same steps by hand (works on **macOS / Linux** and **Windows** — only the two
+marked lines differ):
 
 ```bash
 # 1) Clone the repo and use the production branch
@@ -103,6 +123,21 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
   **invite code** from the sidebar course switcher.
 - **Local, no backend:** on the Course screen, **"Bring your own notebook"** lets you
   upload any `.ipynb` and learn it — works with no account/DB.
+
+### AI (optional)
+Everything above — **accounts, courses, data storage, leaderboard, teacher analytics,
+Learn/Explain** — works with **no AI key**: challenges, explanations, quizzes and
+insights fall back to deterministic built-in output. To test **real LLM generation**,
+add your own key to `.env` and restart:
+
+```bash
+GEMINI_API_KEY=your_google_ai_studio_key     # free tier: https://aistudio.google.com/apikey
+# or an Anthropic key instead:
+# GEMINI_API_KEY=sk-ant-...
+```
+
+We intentionally do **not** ship an AI key — provider keys are billable and must not be
+committed. A free Gemini key takes ~2 minutes to create.
 
 ---
 
