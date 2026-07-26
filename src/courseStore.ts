@@ -1,8 +1,11 @@
 import { COURSE, ICourse, ICourseNotebook, ICourseWeek, NbStatus } from './courseData';
 import { profile, setProfile } from './friendsData';
+import { INbDoc } from './nbSource';
+import { setAuthoredChallenge } from './demoData';
 import {
   listMyCourses,
   getCourseWeeks,
+  listCourseNotebooks,
   joinCourseByInvite,
   createCourseDB,
   deleteCourseDB,
@@ -15,6 +18,18 @@ import {
 } from './supabaseDB';
 import { isConnected } from './supabase';
 import { pointsEngine } from './points';
+
+/**
+ * Content for DB-backed course notebooks, keyed by notebook key (nb_key).
+ * Populated when a course loads its notebooks so the session screen can open
+ * real content from the DB instead of a local workspace file.
+ */
+const courseDocs = new Map<string, INbDoc>();
+
+/** The stored INbDoc for a DB-backed course notebook, if loaded. */
+export function getCourseDoc(key: string): INbDoc | undefined {
+  return courseDocs.get(key);
+}
 
 /**
  * Session course registry — makes the app a complete product loop:
@@ -281,6 +296,56 @@ function weeksFromDb(dbWeeks: IDbWeek[]): ICourseWeek[] {
 }
 
 /**
+ * Load a course's DB notebooks into its ICourse: register each notebook (with
+ * its real release status), stash its content for opening, publish its authored
+ * challenges to the Learn store, and ensure a week bucket exists so it renders.
+ */
+async function loadCourseNotebooks(courseId: string, data: ICourse): Promise<void> {
+  const nbs = await listCourseNotebooks(courseId).catch(() => []);
+  for (const nb of nbs) {
+    const week = nb.week_number ?? 1;
+    data.notebooks[nb.nb_key] = {
+      id: nb.nb_key,
+      title: nb.title,
+      topic: '',
+      blurb: nb.blurb ?? `${nb.cells.length} cells`,
+      week,
+      // path = the key so the notebook reads as openable; the session screen
+      // resolves the content from courseDocs rather than the filesystem.
+      status: nb.status as NbStatus,
+      path: nb.nb_key,
+      deps: []
+    };
+    courseDocs.set(nb.nb_key, {
+      name: nb.title,
+      key: nb.nb_key,
+      path: nb.nb_key,
+      cells: nb.cells
+    });
+    // Publish the teacher's authored tasks so Learn shows them course-wide.
+    for (const [i, ch] of Object.entries(nb.challenges)) {
+      setAuthoredChallenge(nb.nb_key, Number(i), ch as any);
+    }
+    // Make sure the notebook's week exists and lists it.
+    let wk = data.weeks.find(w => w.week === week);
+    if (!wk) {
+      wk = {
+        week,
+        theme: `Week ${week}`,
+        topics: ['To be planned'],
+        slides: { pdf: '', label: 'No slides yet' },
+        notebookIds: []
+      };
+      data.weeks.push(wk);
+      data.weeks.sort((a, b) => a.week - b.week);
+    }
+    if (!wk.notebookIds.includes(nb.nb_key)) {
+      wk.notebookIds.push(nb.nb_key);
+    }
+  }
+}
+
+/**
  * Load the signed-in user's DB courses (taught + enrolled) into the registry,
  * so prof-created courses and joined courses persist across sessions and show
  * their published weeks + slides. Safe to call repeatedly (dedupes by backendId).
@@ -295,7 +360,7 @@ export async function loadCoursesFromDB(): Promise<void> {
       continue; // already present (e.g. the seeded demo course)
     }
     const weeks = weeksFromDb(await getCourseWeeks(m.id).catch(() => []));
-    courses.push({
+    const uc: IUserCourse = {
       id: `db-${m.id}`,
       code: m.invite_code,
       isOwn: m.isOwn,
@@ -308,7 +373,9 @@ export async function loadCoursesFromDB(): Promise<void> {
         weeks,
         notebooks: {}
       }
-    });
+    };
+    await loadCourseNotebooks(m.id, uc.data);
+    courses.push(uc);
   }
 }
 
@@ -342,6 +409,7 @@ export async function joinCourse(codeRaw: string): Promise<IUserCourse | null> {
       backendId: joined.id,
       data: { subject: joined.name, teacher: joined.teacher_name || 'Course teacher', currentWeek: 1, weeks, notebooks: {} }
     };
+    await loadCourseNotebooks(joined.id, uc.data);
     courses.push(uc);
     activeId = uc.id;
     return uc;

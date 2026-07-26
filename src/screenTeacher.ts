@@ -7,6 +7,7 @@ import { loadNotebook, parseUploadedNotebook, INbDoc } from './nbSource';
 import {
   cellTitle,
   setAuthoredChallenge,
+  getAuthoredChallenges,
   demoChallenge,
   setTeacherExplain,
   getTeacherExplain,
@@ -28,6 +29,9 @@ import {
 import { extractPdfFull } from './pdfExtract';
 import {
   upsertCourseWeekSlides,
+  upsertCourseNotebook,
+  setCourseNotebookStatus,
+  deleteCourseNotebook,
   getCellFailStats,
   getCourseActivity,
   getCellComments,
@@ -541,6 +545,34 @@ const tEditWeek = new Set<number>();
 // Teacher-uploaded notebooks (session-scoped): notebook id → parsed cells.
 const uploadedDocs = new Map<string, INbDoc>();
 
+/**
+ * Persist an uploaded course notebook (cells + authored tasks + status) to the
+ * DB so enrolled students load and open it. No-ops for the seeded demo course
+ * and offline, and for notebooks without stored content (nothing to sync).
+ */
+function syncCourseNotebook(key: string): void {
+  const cid = activeBackendCourseId();
+  if (!isConnected() || !cid) {
+    return;
+  }
+  const up = uploadedDocs.get(key);
+  const meta = activeData().notebooks[key];
+  if (!up || !meta) {
+    return;
+  }
+  void upsertCourseNotebook({
+    courseId: cid,
+    nbKey: key,
+    title: meta.title,
+    blurb: meta.blurb,
+    status: meta.status,
+    weekNumber: meta.week,
+    displayOrder: 0,
+    cells: up.cells,
+    challenges: getAuthoredChallenges(key)
+  }).catch(() => undefined);
+}
+
 /** Keep week numbers contiguous (1..n) and notebook.week in sync after edits. */
 function renumberWeeks(COURSE: ReturnType<typeof activeData>): void {
   COURSE.weeks.forEach((w, i) => {
@@ -796,6 +828,7 @@ function weekAdmin(
           setAuthoredChallenge(id, i, dummyAuthored(src, rotation[i % rotation.length]));
         });
         tExpand.set(id, true); // open its task editor straight away
+        syncCourseNotebook(id); // publish to enrolled students (DB-backed courses)
         repaint();
         celebrate(`Analysed ${doc.cells.length} cells · tasks generated`);
       } catch {
@@ -1039,6 +1072,11 @@ function nbAdminRow(
   toggleBtn.addEventListener('click', () => {
     nb.status = locked ? 'available' : 'locked';
     tSchedules.delete(nb.id);
+    // Persist the release state so students actually see it lock / unlock.
+    const cid = activeBackendCourseId();
+    if (isConnected() && cid) {
+      void setCourseNotebookStatus(cid, nb.id, nb.status).catch(() => undefined);
+    }
     repaint();
   });
   row.appendChild(toggleBtn);
@@ -1060,6 +1098,10 @@ function nbAdminRow(
     uploadedDocs.delete(nb.id);
     tSchedules.delete(nb.id);
     tExpand.delete(nb.id);
+    const cid = activeBackendCourseId();
+    if (isConnected() && cid) {
+      void deleteCourseNotebook(cid, nb.id).catch(() => undefined);
+    }
     repaint();
   });
   row.appendChild(delBtn);
@@ -1382,6 +1424,8 @@ function buildForm(key: string, i: number, source: string): HTMLElement {
     if (isConnected() && cid) {
       void upsertTeacherNote(cid, key, i, note).catch(() => null);
     }
+    // Re-publish the notebook so the edited task reaches enrolled students.
+    syncCourseNotebook(key);
     status.textContent = '✓ Saved — task shows in Learn, note in the Explain tab.';
   });
 

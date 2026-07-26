@@ -18,7 +18,8 @@ import {
   courseProgressOf,
   notebookDisplayStatus,
   isNotebookOpenable,
-  getMyStats
+  getMyStats,
+  getCourseDoc
 } from './courseStore';
 import {
   button,
@@ -455,11 +456,16 @@ export function renderHome(host: HTMLElement, app: NotebookMindApp): void {
       row.addEventListener('click', async () => {
         titleEl.textContent = `${nb.title} — loading…`;
         try {
-          const doc = await loadNotebook(
-            app.services.contents,
-            nb.path as string,
-            nb.title
-          );
+          // DB-backed course notebooks carry their content with them; local
+          // workspace notebooks are read from the filesystem by path.
+          const stored = getCourseDoc(nb.path as string);
+          const doc =
+            stored ??
+            (await loadNotebook(
+              app.services.contents,
+              nb.path as string,
+              nb.title
+            ));
           if (doc.cells.length === 0) {
             titleEl.textContent = `${nb.title} (no code cells)`;
             return;

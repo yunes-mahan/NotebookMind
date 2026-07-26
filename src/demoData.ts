@@ -327,6 +327,20 @@ export function setAuthoredChallenge(
   authoredChallenges.set(`${key}:${i}`, a);
 }
 
+/** All authored challenges for a notebook, keyed by cell index (for DB sync). */
+export function getAuthoredChallenges(
+  key: string
+): Record<number, IAuthoredChallenge> {
+  const out: Record<number, IAuthoredChallenge> = {};
+  for (const [k, v] of authoredChallenges) {
+    const sep = k.lastIndexOf(':');
+    if (k.slice(0, sep) === key) {
+      out[Number(k.slice(sep + 1))] = v;
+    }
+  }
+  return out;
+}
+
 export function demoCellMeta(
   notebookName: string,
   i: number

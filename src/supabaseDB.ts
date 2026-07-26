@@ -407,6 +407,112 @@ export async function getCourseWeeks(courseId: string): Promise<IDbWeek[]> {
   }));
 }
 
+// ── Course notebooks (teacher → student content sync) ────────
+
+export interface IDbCourseNotebook {
+  nb_key: string;
+  title: string;
+  blurb: string | null;
+  status: string;
+  week_number: number | null;
+  display_order: number;
+  cells: string[];
+  challenges: Record<number, any>;
+}
+
+/** Persist a course notebook's full content (cells + authored challenges). */
+export async function upsertCourseNotebook(opts: {
+  courseId: string;
+  nbKey: string;
+  title: string;
+  blurb?: string;
+  status: string;
+  weekNumber: number;
+  displayOrder: number;
+  cells: string[];
+  challenges: Record<number, any>;
+}): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  await client.from('course_notebooks').upsert(
+    {
+      course_id: opts.courseId,
+      nb_key: opts.nbKey,
+      title: opts.title,
+      blurb: opts.blurb ?? null,
+      status: opts.status,
+      week_number: opts.weekNumber,
+      display_order: opts.displayOrder,
+      content: { cells: opts.cells, challenges: opts.challenges }
+    },
+    { onConflict: 'course_id,nb_key' }
+  );
+}
+
+/** Lock / unlock a course notebook (persists the teacher's release state). */
+export async function setCourseNotebookStatus(
+  courseId: string,
+  nbKey: string,
+  status: string
+): Promise<void> {
+  const client = getClient();
+  if (!client) {
+    return;
+  }
+  await client
+    .from('course_notebooks')
+    .update({ status })
+    .eq('course_id', courseId)
+    .eq('nb_key', nbKey);
+}
+
+/** Remove a course notebook. */
+export async function deleteCourseNotebook(
+  courseId: string,
+  nbKey: string
+): Promise<void> {
+  const client = getClient();
+  if (!client) {
+    return;
+  }
+  await client
+    .from('course_notebooks')
+    .delete()
+    .eq('course_id', courseId)
+    .eq('nb_key', nbKey);
+}
+
+/** The course's notebooks with their stored content, for enrolled students. */
+export async function listCourseNotebooks(
+  courseId: string
+): Promise<IDbCourseNotebook[]> {
+  const client = getClient();
+  if (!client) {
+    return [];
+  }
+  const { data } = await client
+    .from('course_notebooks')
+    .select('nb_key,title,blurb,status,week_number,display_order,content')
+    .eq('course_id', courseId)
+    .order('display_order');
+  return ((data as any[]) ?? []).map(r => ({
+    nb_key: r.nb_key,
+    title: r.title,
+    blurb: r.blurb,
+    status: r.status,
+    week_number: r.week_number,
+    display_order: r.display_order,
+    cells: Array.isArray(r.content?.cells) ? r.content.cells : [],
+    challenges:
+      r.content && typeof r.content.challenges === 'object'
+        ? r.content.challenges
+        : {}
+  }));
+}
+
 // ── Teacher: course activity aggregate (from submissions) ────
 
 export interface ICourseActivity {
