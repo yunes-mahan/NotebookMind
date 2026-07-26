@@ -625,7 +625,7 @@ export class NotebookMindApp extends Widget {
         'Sign out',
         () => {
           pop.style.display = 'none';
-          this._signOut(false);
+          void this._signOut(false);
         }
       )
     );
@@ -646,7 +646,7 @@ export class NotebookMindApp extends Widget {
           return;
         }
         pop.style.display = 'none';
-        this._signOut(true);
+        void this._signOut(true);
       },
       true
     );
@@ -709,7 +709,7 @@ export class NotebookMindApp extends Widget {
   }
 
   /** Sign out (optionally wiping all local progress) and show the login overlay. */
-  private _signOut(wipe: boolean): void {
+  private async _signOut(wipe: boolean): Promise<void> {
     // Always clear per-user session state so the next account never inherits the
     // previous user's XP / completion / solved counters. loadProgressFromDB then
     // re-seeds the real totals for whoever signs in next.
@@ -726,12 +726,15 @@ export class NotebookMindApp extends Widget {
       });
     }
     clearUser();
-    // End the Supabase session too, otherwise the token persists in
-    // localStorage: a reload would silently sign the same user back in and
-    // any writes while "logged out" stay attributed to them.
-    void signOut();
+    // End the Supabase session and WAIT for it to complete before showing the
+    // login screen. The LoginWidget skips itself while a session still exists
+    // (auth.ts), so without awaiting, the first sign-out would leave the old
+    // user "logged in" and only a second click would take effect.
+    await signOut();
     resetToDemoOnly(); // don't carry this user's DB courses into the next session
     this.doc = null;
+    this._paintAccount(); // refresh the sidebar row out of the old account
+    this._paintTeachSection();
     this.navigate('home');
     const login = new LoginWidget(() => {
       login.node.remove();
