@@ -1196,6 +1196,26 @@ function nbAdminRow(
   spacer.style.cssText = 'flex:1;min-width:8px';
   row.appendChild(spacer);
 
+  // Explicit, visible entry into the per-cell task editor (in addition to
+  // clicking the title) so the author flow is discoverable.
+  const tasksBtn = document.createElement('button');
+  tasksBtn.style.cssText = [
+    'display:inline-flex;align-items:center;gap:5px;height:var(--control-sm);box-sizing:border-box',
+    'padding:0 10px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;font-family:var(--font-sans)',
+    'border:1px solid;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)',
+    open
+      ? 'background:var(--accent-subtle-bg);color:var(--accent-text);border-color:transparent'
+      : 'background:var(--bg-panel);color:var(--text-secondary);border-color:var(--border-default)'
+  ].join(';');
+  tasksBtn.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>' +
+    `<span>${open ? 'Close tasks' : 'Edit tasks'}</span>`;
+  tasksBtn.addEventListener('click', () => {
+    tExpand.set(nb.id, !tExpand.get(nb.id));
+    repaint();
+  });
+  row.appendChild(tasksBtn);
+
   const stateLbl = document.createElement('span');
   stateLbl.style.cssText =
     'font-size:11.5px;font-weight:500;white-space:nowrap;flex:0 0 auto;color:' +
