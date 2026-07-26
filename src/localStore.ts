@@ -7,8 +7,8 @@
  */
 
 const DB_NAME = 'notebookmind-local';
-const DB_VERSION = 1;
-export type LocalStoreName = 'pdfs' | 'notebooks';
+const DB_VERSION = 2;
+export type LocalStoreName = 'pdfs' | 'notebooks' | 'challenges';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -25,6 +25,11 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains('notebooks')) {
         db.createObjectStore('notebooks', { keyPath: 'id' });
+      }
+      // Locally cached AI generations (challenges), so a reload reuses the same
+      // task as long as the cell input is unchanged — no AI re-run, works offline.
+      if (!db.objectStoreNames.contains('challenges')) {
+        db.createObjectStore('challenges', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -43,6 +48,19 @@ export async function localPut(
     tx.objectStore(store).put(record);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function localGet<T = any>(
+  store: LocalStoreName,
+  id: string
+): Promise<T | null> {
+  const db = await openDb();
+  return new Promise<T | null>((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const req = tx.objectStore(store).get(id);
+    req.onsuccess = () => resolve((req.result as T) ?? null);
+    req.onerror = () => reject(req.error);
   });
 }
 

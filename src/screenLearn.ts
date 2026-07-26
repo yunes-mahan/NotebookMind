@@ -15,7 +15,40 @@ import {
 } from './supabaseDB';
 import { isConnected } from './supabase';
 import { activeBackendCourseId, markNotebookDone, addLocalStats } from './courseStore';
+import { localGet, localPut } from './localStore';
 import { button, infoBox, spinner, maxWidth, celebrate } from './uiKit';
+
+/**
+ * Fingerprint a cell's source so a cached AI generation is reused only while
+ * the input is unchanged, and regenerated once the teacher/user edits the cell.
+ */
+function srcHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return String(h >>> 0);
+}
+
+/** Persist a generated challenge locally + (when connected) to the account,
+ *  tagged with the input hash so it survives reloads and works offline. */
+function cacheChallenge(
+  docKey: string,
+  i: number,
+  ch: IChallenge,
+  hash: string
+): void {
+  const tagged = { ...ch, __srcHash: hash } as IChallenge & { __srcHash: string };
+  void localPut('challenges', {
+    id: `${docKey}:${i}`,
+    title: docKey,
+    challenge: tagged,
+    srcHash: hash
+  }).catch(() => undefined);
+  if (isConnected()) {
+    void saveNotebookChallenge(docKey, i, tagged).catch(() => null);
+  }
+}
 
 // Rotate types so a notebook genuinely uses all the styles.
 const ROTATION: ChallengeType[] = ['predict-mc', 'bugfix', 'fillblank'];
@@ -211,10 +244,10 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
           app.difficultyBias
         ));
       app.challenges[i] = ch;
-      // Cache it so a reload reuses this task instead of regenerating with AI.
-      if (isConnected()) {
-        void saveNotebookChallenge(docKey, i, ch).catch(() => null);
-      }
+      // Cache it (locally + to the account) keyed by the cell input, so a
+      // reload reuses this exact task instead of regenerating with the AI —
+      // and it regenerates automatically once the cell's code changes.
+      cacheChallenge(docKey, i, ch, srcHash(cells[i]));
     }
 
     step.title.textContent = `Step ${i + 1} · ${TYPE_LABEL[ch.type]}`;
@@ -657,15 +690,38 @@ export function renderLearn(host: HTMLElement, app: NotebookMindApp): void {
       root.insertBefore(warn, progressRow);
     }
 
-    // Reuse previously generated challenges for this notebook (no AI re-run).
+    // Reuse previously generated challenges for this notebook (no AI re-run),
+    // but only while the cell input is unchanged. Prefer the account cache,
+    // fall back to the local (offline) cache; both are input-hash tagged.
+    const useIfFresh = (i: number, payload: any): void => {
+      if (i < 0 || i >= cells.length || app.challenges[i] || !payload) {
+        return;
+      }
+      const hash = srcHash(cells[i]);
+      // Legacy entries without a hash are still accepted (best-effort reuse).
+      if (payload.__srcHash && payload.__srcHash !== hash) {
+        return;
+      }
+      const { __srcHash, ...clean } = payload;
+      void __srcHash;
+      app.challenges[i] = clean as IChallenge;
+    };
+
     if (isConnected()) {
       const saved = await getNotebookChallenges(docKey).catch(() => ({}));
-      Object.entries(saved).forEach(([k, payload]) => {
-        const i = Number(k);
-        if (i >= 0 && i < cells.length && !app.challenges[i]) {
-          app.challenges[i] = payload as IChallenge;
-        }
-      });
+      Object.entries(saved).forEach(([k, payload]) => useIfFresh(Number(k), payload));
+    }
+    // Local cache (works offline and as a fallback for anything not synced).
+    for (let i = 0; i < cells.length; i++) {
+      if (app.challenges[i]) {
+        continue;
+      }
+      const rec = await localGet<{ challenge: any }>('challenges', `${docKey}:${i}`).catch(
+        () => null
+      );
+      if (rec?.challenge) {
+        useIfFresh(i, rec.challenge);
+      }
     }
 
     await activate(0);
