@@ -20,6 +20,7 @@ import {
   resetProgress
 } from './courseStore';
 import { LoginWidget } from './auth';
+import { signOut } from './supabase';
 import { openProfileModal } from './profileModal';
 import { openOnboarding } from './onboarding';
 
@@ -725,6 +726,10 @@ export class NotebookMindApp extends Widget {
       });
     }
     clearUser();
+    // End the Supabase session too, otherwise the token persists in
+    // localStorage: a reload would silently sign the same user back in and
+    // any writes while "logged out" stay attributed to them.
+    void signOut();
     resetToDemoOnly(); // don't carry this user's DB courses into the next session
     this.doc = null;
     this.navigate('home');
