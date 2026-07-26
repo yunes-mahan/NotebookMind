@@ -1524,9 +1524,24 @@ function cellAuthor(key: string, i: number, source: string): HTMLElement {
   tl.style.cssText =
     'font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)';
   tl.textContent = cellTitle(key, source, i);
-  const toggle = button('Author', 'ghost');
-  toggle.style.height = 'var(--control-sm)';
-  toggle.style.fontSize = '12px';
+  // Pill-styled toggle, consistent with Edit tasks / Edit week.
+  const pencilSvg =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
+  const pillStyle = (activeState: boolean): string =>
+    [
+      'display:inline-flex;align-items:center;gap:6px;height:var(--control-sm);box-sizing:border-box;flex:0 0 auto',
+      'padding:0 11px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;font-family:var(--font-sans)',
+      'border:1px solid;transition:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)',
+      activeState
+        ? 'background:var(--accent-subtle-bg);color:var(--accent-text);border-color:transparent'
+        : 'background:var(--bg-panel);color:var(--text-secondary);border-color:var(--border-default)'
+    ].join(';');
+  const toggle = document.createElement('button');
+  const paintToggle = (open: boolean): void => {
+    toggle.style.cssText = pillStyle(open);
+    toggle.innerHTML = pencilSvg + `<span>${open ? 'Close' : 'Edit cell'}</span>`;
+  };
+  paintToggle(false);
   t.appendChild(num);
   t.appendChild(tl);
   t.appendChild(toggle);
@@ -1545,10 +1560,10 @@ function cellAuthor(key: string, i: number, source: string): HTMLElement {
       }
       formHost.style.display = 'block';
       formHost.style.padding = '0 16px 14px';
-      toggle.textContent = 'Hide';
+      paintToggle(true);
     } else {
       formHost.style.display = 'none';
-      toggle.textContent = 'Author';
+      paintToggle(false);
     }
   });
   return c;
