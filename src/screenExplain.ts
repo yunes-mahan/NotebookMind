@@ -8,7 +8,13 @@ import { demoCellMeta, demoCellSlides, cellTitle } from './demoData';
 import { activeBackendCourseId, activeCourse } from './courseStore';
 import { profile } from './friendsData';
 import { isConnected } from './supabase';
-import { getCellComments, addCellComment, ICellComment } from './supabaseDB';
+import {
+  getCellComments,
+  addCellComment,
+  getNotebookCellNotes,
+  upsertCellNotes,
+  ICellComment
+} from './supabaseDB';
 import { subscribe } from './realtime';
 
 interface ICellResult {
@@ -48,6 +54,39 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   // Each cell's detail panel, so a live comment change can re-render just that cell.
   const cellBodies = new Map<number, HTMLElement>();
   const courseId = activeBackendCourseId();
+
+  // Debounced, per-cell save of the private margin notes to the user's account.
+  const noteSaveTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  function scheduleSaveNotes(i: number): void {
+    const prev = noteSaveTimers.get(i);
+    if (prev) {
+      clearTimeout(prev);
+    }
+    noteSaveTimers.set(
+      i,
+      setTimeout(() => {
+        const L = sideNotesStore.get(`${docKey}:${i}-L`) ?? [];
+        const R = sideNotesStore.get(`${docKey}:${i}-R`) ?? [];
+        void upsertCellNotes(docKey, i, { L, R }).catch(() => undefined);
+      }, 700)
+    );
+  }
+
+  // Load the user's saved private notes for this notebook before the cells paint.
+  async function loadPersistedNotes(): Promise<void> {
+    if (!isConnected()) {
+      return;
+    }
+    try {
+      const map = await getNotebookCellNotes(docKey);
+      map.forEach((arr, k) => {
+        const [ci, side] = k.split(':'); // `${cell_index}:${side}`
+        sideNotesStore.set(`${docKey}:${ci}-${side}`, arr);
+      });
+    } catch {
+      /* notes are best-effort; never block the screen */
+    }
+  }
 
   async function loadComments(i: number, force = false): Promise<ICellComment[]> {
     if (!force && commentsCache.has(i)) {
@@ -121,6 +160,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
           e.stopPropagation();
           const arr = (sideNotesStore.get(key) ?? []).filter((_, j) => j !== ni);
           sideNotesStore.set(key, arr);
+          scheduleSaveNotes(i);
           paint();
         });
         head.appendChild(del);
@@ -133,6 +173,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
           const arr = (sideNotesStore.get(key) ?? []).slice();
           arr[ni] = ta.value;
           sideNotesStore.set(key, arr);
+          scheduleSaveNotes(i);
         });
         note.appendChild(head);
         note.appendChild(ta);
@@ -152,6 +193,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       const arr = (sideNotesStore.get(key) ?? []).slice();
       arr.push('');
       sideNotesStore.set(key, arr);
+      scheduleSaveNotes(i);
       paint();
       const areas = col.querySelectorAll('textarea');
       (areas[areas.length - 1] as HTMLTextAreaElement | undefined)?.focus();
@@ -699,6 +741,8 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
       host.insertBefore(warn, stage);
     }
 
+    // Pull the student's saved private notes so the margins show them on open.
+    await loadPersistedNotes();
     build();
   }
 

@@ -595,6 +595,35 @@ async function main() {
     skip('Personal file upload', 'no student session');
   }
 
+  // ── 19b. Private per-cell notebook notes (migration 21) ────────────────
+  // A student's margin notes on a shared (teacher-uploaded) notebook are saved
+  // to their OWN account, survive reload, and stay private (RLS owner-only).
+  section('19b. Private per-cell notebook notes');
+  if (studentOk && teacherOk) {
+    const nbKey = '__nmtest_notes.ipynb';
+    const note = 'my private aha ' + rand(4);
+    const up = await sbStudent.from('cell_notes').upsert(
+      { user_id: studentId, notebook_key: nbKey, cell_index: 2, notes: { L: [note], R: [] } },
+      { onConflict: 'user_id,notebook_key,cell_index' }
+    );
+    check('Student can save a private cell note', !up.error, up.error ? up.error.message : '');
+
+    const back = await sbStudent.from('cell_notes').select('notes').eq('user_id', studentId).eq('notebook_key', nbKey).eq('cell_index', 2).single();
+    const ok = !back.error && back.data?.notes?.L?.[0] === note;
+    check('Private note reads back after reload', ok, back.error ? back.error.message : `L=${JSON.stringify(back.data?.notes?.L)}`);
+
+    // Privacy: the teacher (a different user) must not see the student's note.
+    const leak = await sbTeacher.from('cell_notes').select('id').eq('notebook_key', nbKey).eq('cell_index', 2);
+    check('Notes are private — another user cannot read them', !leak.error && Array.isArray(leak.data) && leak.data.length === 0, leak.error ? leak.error.message : `leaked ${leak.data?.length} rows`);
+
+    // Clearing both margins removes the row (matches the client's empty-note path).
+    await sbStudent.from('cell_notes').delete().eq('user_id', studentId).eq('notebook_key', nbKey);
+    const gone = await sbStudent.from('cell_notes').select('id').eq('user_id', studentId).eq('notebook_key', nbKey);
+    check('Cleared note is removed', !gone.error && (gone.data || []).length === 0, gone.error ? gone.error.message : `rows=${gone.data?.length}`);
+  } else {
+    skip('Private per-cell notebook notes', 'need student + teacher sessions');
+  }
+
   // ── 20. Friend requests / sharing (consent-based, migration 18) ─────────
   // End-to-end: student sends a request to the teacher by email → one-directional
   // (stats hidden) → teacher accepts → mutual (stats visible) → student withdraws.
@@ -790,29 +819,35 @@ async function main() {
       try { sbTeacher.realtime.setAuth(teacherToken); } catch { /* older client */ }
 
       let resolveEvt;
+      let lastStatus = '(none)';
       const received = new Promise(res => { resolveEvt = res; });
       const ch = sbTeacher
         .channel('nmtest:rt:' + rand())
         .on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'cell_comments', filter: `course_id=eq.${tempCourseId}` },
-          () => resolveEvt(true)
+          () => resolveEvt('event')
         )
         .subscribe(async status => {
+          lastStatus = status;
           if (status === 'SUBSCRIBED') {
-            // Insert once the socket is live so we don't miss the event.
+            // Insert only once the socket is live so we never miss the event.
             await sbTeacher.from('cell_comments').insert({
               user_id: teacherId, course_id: tempCourseId, notebook_key: 'rt_test',
               cell_index: 0, role: 'teacher', author_name: null, body: 'realtime ping ' + rand()
             });
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            resolveEvt('status:' + status);
           }
         });
 
-      const ok = await Promise.race([
+      // Generous window — the socket handshake + RLS join can be slow to warm up
+      // on the free tier, and that time shouldn't count against event delivery.
+      const outcome = await Promise.race([
         received,
-        new Promise(res => setTimeout(() => res(false), 15000))
+        new Promise(res => setTimeout(() => res('timeout'), 30000))
       ]);
-      check('Realtime delivers a live INSERT event (cell_comments)', ok === true, ok ? 'event received over the socket' : 'no event within 15s');
+      check('Realtime delivers a live INSERT event (cell_comments)', outcome === 'event', outcome === 'event' ? 'event received over the socket' : `${outcome} (last status: ${lastStatus})`);
       try { await sbTeacher.removeChannel(ch); } catch { /* ignore */ }
     } else {
       skip('Realtime live INSERT event', 'no teacher session or temp course');

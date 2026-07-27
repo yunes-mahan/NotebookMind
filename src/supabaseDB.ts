@@ -1236,6 +1236,78 @@ export async function upsertSectionNote(
   );
 }
 
+// ── Private per-cell notebook notes (migration 21) ───────────
+// The Explain-mode margin "Note" stickies, saved PER STUDENT (owner-only RLS).
+// One row per (user, notebook, cell); `notes` holds both margin sides.
+
+export interface ICellNoteSides {
+  L: string[];
+  R: string[];
+}
+
+/** All of the current user's private notes for a notebook, keyed `${cell}:${side}`
+ *  → string[] (same shape the Explain screen's in-memory store uses). */
+export async function getNotebookCellNotes(
+  notebookKey: string
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return out;
+  }
+  const { data } = await client
+    .from('cell_notes')
+    .select('cell_index,notes')
+    .eq('user_id', user.id)
+    .eq('notebook_key', notebookKey);
+  for (const row of (data as any[]) ?? []) {
+    const sides = (row.notes ?? {}) as Partial<ICellNoteSides>;
+    if (Array.isArray(sides.L) && sides.L.length) {
+      out.set(`${row.cell_index}:L`, sides.L);
+    }
+    if (Array.isArray(sides.R) && sides.R.length) {
+      out.set(`${row.cell_index}:R`, sides.R);
+    }
+  }
+  return out;
+}
+
+/** Save (or clear) the current user's private notes for one cell. Deletes the
+ *  row when both margins are empty so we don't leave blank rows behind. */
+export async function upsertCellNotes(
+  notebookKey: string,
+  cellIndex: number,
+  sides: ICellNoteSides
+): Promise<void> {
+  const client = getClient();
+  const user = getCurrentUser();
+  if (!client || !user) {
+    return;
+  }
+  const L = (sides.L ?? []).filter(s => s.trim().length > 0);
+  const R = (sides.R ?? []).filter(s => s.trim().length > 0);
+  if (L.length === 0 && R.length === 0) {
+    await client
+      .from('cell_notes')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('notebook_key', notebookKey)
+      .eq('cell_index', cellIndex);
+    return;
+  }
+  await client.from('cell_notes').upsert(
+    {
+      user_id: user.id,
+      notebook_key: notebookKey,
+      cell_index: cellIndex,
+      notes: { L, R },
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'user_id,notebook_key,cell_index' }
+  );
+}
+
 // ── Course Week Slides ───────────────────────────────────────
 
 export interface IWeekSlideResult {
