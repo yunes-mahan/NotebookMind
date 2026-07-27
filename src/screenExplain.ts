@@ -9,6 +9,7 @@ import { activeBackendCourseId, activeCourse } from './courseStore';
 import { profile } from './friendsData';
 import { isConnected } from './supabase';
 import { getCellComments, addCellComment, ICellComment } from './supabaseDB';
+import { subscribe } from './realtime';
 
 interface ICellResult {
   output: string;
@@ -44,6 +45,8 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
   // Real cell comments (teacher notes + student comments) fetched from Supabase,
   // cached per cell so switching tabs doesn't refetch.
   const commentsCache = new Map<number, ICellComment[]>();
+  // Each cell's detail panel, so a live comment change can re-render just that cell.
+  const cellBodies = new Map<number, HTMLElement>();
   const courseId = activeBackendCourseId();
 
   async function loadComments(i: number, force = false): Promise<ICellComment[]> {
@@ -242,6 +245,7 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
     card.appendChild(tabsRow);
     card.appendChild(body);
 
+    cellBodies.set(i, body);
     renderTab(body, i);
     return card;
   }
@@ -696,6 +700,28 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
     }
 
     build();
+  }
+
+  // Live comments: when a teacher note or classmate comment on this notebook
+  // changes (course-scoped), invalidate that cell's cache and re-render just its
+  // detail panel — so notes/comments appear both ways without a reload.
+  if (isConnected() && courseId) {
+    subscribe({
+      table: 'cell_comments',
+      filter: `course_id=eq.${courseId}`,
+      onChange: payload => {
+        const row = payload.new ?? payload.old;
+        if (!row || row.notebook_key !== docKey || typeof row.cell_index !== 'number') {
+          return;
+        }
+        const i = row.cell_index;
+        commentsCache.delete(i);
+        const body = cellBodies.get(i);
+        if (body) {
+          renderTab(body, i);
+        }
+      }
+    });
   }
 
   void prepare();

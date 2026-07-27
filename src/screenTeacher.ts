@@ -44,6 +44,7 @@ import {
   ITopicStat
 } from './supabaseDB';
 import { isConnected } from './supabase';
+import { subscribe, debounce } from './realtime';
 
 type Tab = 'overview' | 'content';
 
@@ -244,6 +245,20 @@ function analyticsEmpty(title: string, body: string): HTMLElement {
 }
 
 // ── Overview — real, anonymous aggregate analytics from Supabase ──
+interface IOverviewCtx {
+  rows: IStruggleRow[];
+  act: ICourseActivity;
+  students: IStudentPerformance[];
+  topics: ITopicStat[];
+}
+const EMPTY_ACT: ICourseActivity = {
+  submissionCount: 0,
+  activeStudents: 0,
+  avgFirstTryPct: 0,
+  totalXp: 0,
+  recent: []
+};
+
 function renderOverview(host: HTMLElement): void {
   host.style.cssText = 'display:flex;flex-direction:column;gap:14px';
 
@@ -258,85 +273,115 @@ function renderOverview(host: HTMLElement): void {
     return;
   }
 
-  const loading = spinner('Loading class analytics…');
-  host.appendChild(loading);
+  // Live status pill so the teacher can see the dashboard updates on its own.
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;align-items:center;gap:10px';
+  bar.innerHTML =
+    '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-tertiary)">' +
+    '<span style="width:7px;height:7px;border-radius:50%;background:var(--green-500);box-shadow:0 0 0 3px rgba(31,138,91,0.18)"></span>' +
+    'Live — the roster & plots update automatically as students join and work</span>';
+  const updated = document.createElement('span');
+  updated.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+  bar.appendChild(updated);
+  host.appendChild(bar);
 
-  void Promise.all([
-    getCellFailStats(courseId).catch(() => [] as ICellFailStat[]),
-    getCourseActivity(courseId).catch(() => null),
-    getCourseStudentPerformance(courseId).catch(() => [] as IStudentPerformance[]),
-    getCourseTopicStats(courseId).catch(() => [] as ITopicStat[])
-  ]).then(([cellStats, activity, students, topics]) => {
-    loading.remove();
-    const act: ICourseActivity = activity ?? {
-      submissionCount: 0,
-      activeStudents: 0,
-      avgFirstTryPct: 0,
-      totalXp: 0,
-      recent: []
-    };
+  // Data section (re-painted on live changes) + AI section (built once).
+  const dataHost = document.createElement('div');
+  dataHost.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  host.appendChild(dataHost);
+  const aiHost = document.createElement('div');
+  host.appendChild(aiHost);
+
+  const ctx: IOverviewCtx = { rows: [], act: EMPTY_ACT, students: [], topics: [] };
+  let aiCard: { el: HTMLElement; refresh: () => void } | null = null;
+  let first = true;
+
+  const paint = async (): Promise<void> => {
+    if (first) {
+      dataHost.appendChild(spinner('Loading class analytics…'));
+    }
+    const [cellStats, activity, students, topics] = await Promise.all([
+      getCellFailStats(courseId).catch(() => [] as ICellFailStat[]),
+      getCourseActivity(courseId).catch(() => null),
+      getCourseStudentPerformance(courseId).catch(() => [] as IStudentPerformance[]),
+      getCourseTopicStats(courseId).catch(() => [] as ITopicStat[])
+    ]);
+    const act: ICourseActivity = activity ?? EMPTY_ACT;
+    const struggles = toStruggleRows(cellStats);
+    ctx.rows = struggles;
+    ctx.act = act;
+    ctx.students = students;
+    ctx.topics = topics;
+
+    dataHost.innerHTML = '';
+    first = false;
+    updated.textContent = `updated ${new Date().toLocaleTimeString()}`;
 
     if (cellStats.length === 0 && act.submissionCount === 0 && students.length === 0) {
-      host.appendChild(
+      dataHost.appendChild(
         analyticsEmpty(
           'No student activity yet',
           'Analytics appear here once students join with your invite code and work through notebooks in Learn mode.'
         )
       );
+      if (aiCard) {
+        aiHost.innerHTML = '';
+        aiCard = null;
+      }
       return;
     }
 
-    const struggles = toStruggleRows(cellStats);
     const highStruggle = struggles.filter(s => s.struggle >= 50).length;
     const enrolled = students.length;
-
-    // Prefer figures derived from the per-student data (teacher-scoped RPC),
-    // falling back to the aggregate activity when that's all we have.
     const totalAttempted = students.reduce((a, s) => a + s.cellsAttempted, 0);
     const totalFirstTry = students.reduce((a, s) => a + s.cellsFirstTry, 0);
     const avgFirstTry =
-      totalAttempted > 0
-        ? Math.round((totalFirstTry / totalAttempted) * 100)
-        : act.avgFirstTryPct;
+      totalAttempted > 0 ? Math.round((totalFirstTry / totalAttempted) * 100) : act.avgFirstTryPct;
     const submissions =
       students.reduce((a, s) => a + s.notebooksCompleted, 0) || act.submissionCount;
 
-    // KPI tiles
     const stats = document.createElement('div');
-    stats.style.cssText =
-      'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
+    stats.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:12px';
     stats.appendChild(kpiTile(String(enrolled || act.activeStudents), 'Students', 'enrolled in this course'));
     stats.appendChild(kpiTile(`${avgFirstTry}%`, 'Avg first-try rate', 'across notebooks'));
     stats.appendChild(kpiTile(String(submissions), 'Submissions', 'notebook runs completed'));
-    stats.appendChild(
-      kpiTile(String(highStruggle), 'High-struggle cells', 'need your attention', 'var(--yellow-500)')
-    );
-    host.appendChild(stats);
+    stats.appendChild(kpiTile(String(highStruggle), 'High-struggle cells', 'need your attention', 'var(--yellow-500)'));
+    dataHost.appendChild(stats);
 
-    // Per-student roster + performance bars (real students, teacher-only).
     if (students.length > 0) {
-      host.appendChild(studentsCard(students));
+      dataHost.appendChild(studentsCard(students));
     }
-
-    // Per-topic understanding — a second graph showing, per topic, what the
-    // class understood (first-try) vs. where they failed.
     if (topics.length > 0) {
-      host.appendChild(topicUnderstandingCard(topics));
+      dataHost.appendChild(topicUnderstandingCard(topics));
     }
-
-    // Struggle (left, wide) + Topic mastery (right) — only when we have per-cell data.
     if (struggles.length > 0) {
       const grid = document.createElement('div');
       grid.style.cssText =
         'display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px;align-items:start';
       grid.appendChild(struggleCard(struggles));
       grid.appendChild(topicMastery(struggles));
-      host.appendChild(grid);
+      dataHost.appendChild(grid);
     }
 
-    // AI insights — grounded in the real per-cell + per-student + topic data.
-    host.appendChild(insightsCard(struggles, act, students, topics));
-  });
+    // Build the AI card once. On later (live) paints only its algorithmic
+    // summary refreshes — the generated AI report + chat persist, so a student
+    // joining never re-triggers the AI and burns credits.
+    if (!aiCard) {
+      aiCard = insightsCard(courseId, () => ctx);
+      aiHost.appendChild(aiCard.el);
+    } else {
+      aiCard.refresh();
+    }
+  };
+
+  void paint();
+
+  // Live: re-fetch + re-paint the plots/roster (algorithmic only) when a student
+  // joins, submits a notebook, or records an attempt in this course.
+  const onChange = debounce(() => void paint(), 600);
+  subscribe({ table: 'course_enrollments', filter: `course_id=eq.${courseId}`, onChange });
+  subscribe({ table: 'notebook_submissions', filter: `course_id=eq.${courseId}`, onChange });
+  subscribe({ table: 'cell_attempts', filter: `course_id=eq.${courseId}`, onChange });
 }
 
 /** Roster of enrolled students with per-student performance bars. */
@@ -562,44 +607,114 @@ function localInsights(
   return `${studentBlock}${topicBlock}## Where students struggle\n\nThe lowest first-try rates this far:\n\n${lines}\n\n**Suggested action:** revisit these cells in class or add a worked example to the relevant week’s slides.`;
 }
 
-/** AI-insights card with a real-data fallback + the "ask" chat. */
+// Generated AI reports are cached per course for the session, so switching tabs
+// or a live data refresh never silently re-spends the teacher's AI credits — the
+// AI only runs when they click "Generate".
+const aiInsightCache = new Map<string, { text: string; stamp: string }>();
+
+/** A cheap signature of the data, to flag "stale" AI reports after live changes. */
+function ctxStamp(ctx: IOverviewCtx): string {
+  const ft = ctx.students.reduce((a, s) => a + s.cellsFirstTry, 0);
+  const at = ctx.students.reduce((a, s) => a + s.cellsAttempted, 0);
+  return `${ctx.students.length}|${ctx.act.submissionCount}|${at}|${ft}|${ctx.rows.length}`;
+}
+
+/**
+ * Insights card: an always-on **algorithmic** summary (updates live) + an
+ * on-demand **AI** report behind a button + the "ask" chat. Returns a `refresh`
+ * used on live paints to update only the algorithmic parts (never the AI/chat).
+ */
 function insightsCard(
-  rows: IStruggleRow[],
-  act: ICourseActivity,
-  students: IStudentPerformance[] = [],
-  topics: ITopicStat[] = []
-): HTMLElement {
-  const context = buildInsightsContext(rows, act, students, topics);
+  courseId: string,
+  getCtx: () => IOverviewCtx
+): { el: HTMLElement; refresh: () => void } {
   const aiCard = document.createElement('div');
   aiCard.style.cssText =
     'background:var(--surface-card);border:1px solid var(--border-default);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px';
-  const aiHead = document.createElement('div');
-  aiHead.style.cssText = 'display:flex;align-items:center;gap:8px';
-  const aiTitle = document.createElement('span');
-  aiTitle.style.cssText = 'font-size:13.5px;font-weight:600;color:var(--text-primary)';
-  aiTitle.textContent = 'AI insights';
-  aiHead.appendChild(aiTitle);
-  aiHead.appendChild(tag(isAiReady() ? 'Generated' : 'From your data', 'accent'));
-  aiCard.appendChild(aiHead);
 
-  const insHost = document.createElement('div');
-  insHost.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
-  insHost.appendChild(renderMarkdown(localInsights(rows, students, topics)));
-  aiCard.appendChild(insHost);
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:8px';
+  head.innerHTML = '<span style="font-size:13.5px;font-weight:600;color:var(--text-primary)">Insights</span>';
+  const badge = tag(aiInsightCache.has(courseId) ? 'AI-generated' : 'From your data', 'accent');
+  head.appendChild(badge);
+  aiCard.appendChild(head);
 
-  // Upgrade to an AI-written report when a key is configured — still grounded
-  // in the real context so it never invents cells that don't exist.
+  // Algorithmic summary — always shown, no AI, refreshed on live changes.
+  const summary = document.createElement('div');
+  summary.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
+  const paintSummary = (): void => {
+    const c = getCtx();
+    summary.innerHTML = '';
+    summary.appendChild(renderMarkdown(localInsights(c.rows, c.students, c.topics)));
+  };
+  paintSummary();
+  aiCard.appendChild(summary);
+
+  // On-demand AI section (only when an AI key is configured).
+  const staleNote = document.createElement('span');
+  staleNote.style.cssText = 'font-size:11px;color:var(--yellow-600);min-height:14px';
+  const aiOut = document.createElement('div');
+  aiOut.style.cssText = 'font-size:13px;line-height:1.65;color:var(--text-secondary)';
+
+  const renderCached = (): void => {
+    const cached = aiInsightCache.get(courseId);
+    aiOut.innerHTML = '';
+    if (cached) {
+      aiOut.appendChild(renderMarkdown(cached.text));
+      staleNote.textContent =
+        cached.stamp !== ctxStamp(getCtx())
+          ? 'Data changed since this report — click Regenerate for an up-to-date version.'
+          : '';
+    } else {
+      staleNote.textContent = '';
+    }
+  };
+
   if (isAiReady()) {
-    void teacherInsights(context)
-      .then(text => {
-        insHost.innerHTML = '';
-        insHost.appendChild(renderMarkdown(text));
-      })
-      .catch(() => undefined);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+    const genBtn = button(aiInsightCache.has(courseId) ? 'Regenerate AI insights' : 'Generate AI insights', 'secondary');
+    genBtn.style.height = 'var(--control-sm)';
+    const hint = document.createElement('span');
+    hint.style.cssText = 'font-size:11px;color:var(--text-quaternary)';
+    hint.textContent = 'Uses your AI key — runs only when you click, not on every change.';
+    row.appendChild(genBtn);
+    row.appendChild(hint);
+    aiCard.appendChild(row);
+    aiCard.appendChild(staleNote);
+    aiCard.appendChild(aiOut);
+
+    genBtn.addEventListener('click', async () => {
+      genBtn.disabled = true;
+      genBtn.textContent = 'Generating…';
+      try {
+        const c = getCtx();
+        const text = await teacherInsights(buildInsightsContext(c.rows, c.act, c.students, c.topics));
+        aiInsightCache.set(courseId, { text, stamp: ctxStamp(c) });
+        badge.textContent = 'AI-generated';
+        renderCached();
+      } catch {
+        /* keep the last state on failure */
+      } finally {
+        genBtn.disabled = false;
+        genBtn.textContent = 'Regenerate AI insights';
+      }
+    });
+    renderCached(); // show a previously generated report if one exists this session
   }
 
-  aiCard.appendChild(teacherChat(context));
-  return aiCard;
+  // Ask-the-data chat (context captured at build time; the conversation is
+  // preserved across live refreshes).
+  const c0 = getCtx();
+  aiCard.appendChild(teacherChat(buildInsightsContext(c0.rows, c0.act, c0.students, c0.topics)));
+
+  return {
+    el: aiCard,
+    refresh: () => {
+      paintSummary();
+      renderCached();
+    }
+  };
 }
 
 /** Where students struggle — horizontal indigo bars, from real cell stats. */

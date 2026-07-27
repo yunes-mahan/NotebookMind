@@ -116,6 +116,7 @@ async function main() {
   const sbAnon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
 
   let teacherId = null;
+  let teacherToken = null;
   let studentId = null;
   let tempCourseId = null;
   let docId = null;
@@ -144,6 +145,7 @@ async function main() {
   {
     const t = await loginWithRetry(sbTeacher, TEACHER.email, TEACHER.password);
     teacherId = t.data?.user?.id ?? null;
+    teacherToken = t.data?.session?.access_token ?? null; // for Realtime auth (§23)
     check('Professor can sign in', !!teacherId, t.error ? t.error.message : TEACHER.email);
 
     const s = await loginWithRetry(sbStudent, STUDENT.email, STUDENT.password);
@@ -748,6 +750,72 @@ async function main() {
       check('AI provider returns a non-empty completion', !!text && text.trim().length > 0, text ? `“${text.trim().slice(0, 60)}…”` : 'empty response');
     } catch (e) {
       check('AI provider returns a non-empty completion', false, e.message);
+    }
+  }
+
+  // ── 23. Realtime (live updates, migration 20) ──────────────────────────
+  // The teacher dashboard, Explain comments and friends update live via Supabase
+  // Realtime (postgres_changes). Two checks: the tables are in the realtime
+  // publication, and a subscriber actually receives a live INSERT event.
+  section('23. Realtime (live updates)');
+  {
+    // (a) Publication membership — needs a direct DB connection.
+    const DB_URL = process.env.NM_DB_URL || process.env.DATABASE_URL || '';
+    let pg = null;
+    try { pg = require('pg'); } catch { pg = null; }
+    if (DB_URL && pg) {
+      const dbc = new pg.Client({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } });
+      try {
+        await dbc.connect();
+        const r = await dbc.query(
+          `select tablename from pg_publication_tables where pubname='supabase_realtime' and schemaname='public'`
+        );
+        const have = new Set(r.rows.map(x => x.tablename));
+        const want = ['course_enrollments', 'notebook_submissions', 'cell_comments', 'friend_shares', 'cell_attempts', 'course_notebooks'];
+        const missing = want.filter(t => !have.has(t));
+        check('Realtime enabled on the collaboration tables', missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : `${want.length} tables in supabase_realtime`);
+      } catch (e) {
+        check('Realtime publication membership', false, e.message);
+      } finally {
+        try { await dbc.end(); } catch { /* ignore */ }
+      }
+    } else {
+      skip('Realtime publication membership', 'set NM_DB_URL to verify pg_publication_tables');
+    }
+
+    // (b) Live end-to-end: subscribe as the teacher (the already-signed-in
+    // client, so its socket carries the auth JWT and RLS lets the event through),
+    // insert a comment on their temp course, and assert the INSERT arrives.
+    if (teacherOk && tempCourseId) {
+      try { sbTeacher.realtime.setAuth(teacherToken); } catch { /* older client */ }
+
+      let resolveEvt;
+      const received = new Promise(res => { resolveEvt = res; });
+      const ch = sbTeacher
+        .channel('nmtest:rt:' + rand())
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'cell_comments', filter: `course_id=eq.${tempCourseId}` },
+          () => resolveEvt(true)
+        )
+        .subscribe(async status => {
+          if (status === 'SUBSCRIBED') {
+            // Insert once the socket is live so we don't miss the event.
+            await sbTeacher.from('cell_comments').insert({
+              user_id: teacherId, course_id: tempCourseId, notebook_key: 'rt_test',
+              cell_index: 0, role: 'teacher', author_name: null, body: 'realtime ping ' + rand()
+            });
+          }
+        });
+
+      const ok = await Promise.race([
+        received,
+        new Promise(res => setTimeout(() => res(false), 15000))
+      ]);
+      check('Realtime delivers a live INSERT event (cell_comments)', ok === true, ok ? 'event received over the socket' : 'no event within 15s');
+      try { await sbTeacher.removeChannel(ch); } catch { /* ignore */ }
+    } else {
+      skip('Realtime live INSERT event', 'no teacher session or temp course');
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   stopSharing,
   IFriend
 } from './supabaseDB';
+import { subscribe, debounce } from './realtime';
 
 interface IRowSpec {
   stateLabel: string;
@@ -219,6 +220,12 @@ export function renderFriends(host: HTMLElement, app: NotebookMindApp): void {
       });
     };
     void loadAndPaint();
+
+    // Live: refresh the list when anyone shares with me, accepts, or withdraws.
+    // RLS on friend_shares already limits realtime to rows where I'm a party, so
+    // an unfiltered subscription only delivers changes that involve me.
+    const onFriendChange = debounce(() => void loadAndPaint(), 500);
+    subscribe({ table: 'friend_shares', onChange: onFriendChange });
   } else {
     // ── Demo (session-only) mode ──
     const doInvite = (): void => {
