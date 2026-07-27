@@ -61,22 +61,32 @@ python3 -m venv venv
 source venv/bin/activate            # Windows (PowerShell): venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 
-# 3) Install JupyterLab
-pip install jupyterlab
+# 3) Install the Python deps: JupyterLab + kernel + the notebooks' libraries
+pip install -r requirements.txt     # jupyterlab, ipykernel, numpy, pandas, matplotlib
 
-# 4) Build the extension (frontend) and install it in dev mode
+# 4) Register THIS venv's Python as the notebook kernel (so cell runs find numpy etc.)
+python -m ipykernel install --sys-prefix --name python3 --display-name "Python 3 (NotebookMind)"
+
+# 5) Build the extension (frontend) and install it in dev mode
 jlpm install                        # JS dependencies (jlpm ships with JupyterLab)
 jlpm run build                      # TypeScript -> lib/ , then bundle -> notebookmind/labextension/
 pip install -e .                    # installs the Python package AND registers the extension
 # Optional (older JupyterLab, live-reload link — safe to skip / may no-op):
 # jupyter labextension develop . --overwrite
 
-# 5) Configure the backend (Supabase) — turnkey, values are public-safe
+# 6) Configure the backend (Supabase) — turnkey, values are public-safe
 cp .env.example .env                # Windows: copy .env.example .env
 
-# 6) Run
+# 7) Run
 jupyter lab
 ```
+
+> **Why step 4 matters:** the course notebooks import `numpy`, `pandas` and
+> `matplotlib`. The kernel must be **this venv's** Python (where step 3 installed
+> them). If a stray `python` on your PATH is used instead, every cell run fails
+> with `ModuleNotFoundError` and the `import numpy as np` cascade leaves `np`
+> undefined. `--sys-prefix` binds the kernel to the venv by absolute path.
+> (`setup.sh` / `setup.ps1` do steps 3–4 for you.)
 
 Then open the URL JupyterLab prints (it includes a token), e.g.
 `http://localhost:8888/lab?token=...`. The **Runcell login screen appears
@@ -253,6 +263,11 @@ Postgres connection string).
 - **Extension not showing / not built** → `jupyter labextension list` should list
   `notebookmind … enabled OK`. If not, re-run `jlpm run build` then
   `jupyter labextension develop . --overwrite`.
+- **Notebook cells fail with `ModuleNotFoundError: No module named 'numpy'`/`'matplotlib'`, or `name 'np' is not defined`** → the kernel is running against the wrong Python. Fix it by installing the libs into the venv and re-binding the kernel to the venv interpreter:
+  `pip install -r requirements.txt` then
+  `python -m ipykernel install --sys-prefix --name python3 --display-name "Python 3 (NotebookMind)"`,
+  then restart JupyterLab. Verify a notebook runs end-to-end with
+  `jupyter nbconvert --to notebook --execute --stdout learn_demo.ipynb`.
 - **Port already in use** → JupyterLab picks 8889/8890; use the URL it prints.
 - **Sign-up fails with "email rate limit exceeded"** → expected on the shared project
   (confirmation emails are rate-limited). Use the existing test accounts instead of
