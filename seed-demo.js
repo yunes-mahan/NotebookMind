@@ -1,39 +1,57 @@
 // Seed the demo course with fake students so the DB-backed features (course
-// leaderboard, teacher analytics) show live data. Idempotent: re-running wipes
-// the previous fake students + demo-course activity and recreates them.
+// leaderboard, per-student roster, topic-understanding plot, "where students
+// struggle", AI insights) all show rich, believable data. Idempotent: re-running
+// wipes the previous fake students + demo-course activity and recreates them.
 //
 // Fake students are inserted straight into auth.users (bcrypt password via
 // pgcrypto) — same technique as setup-accounts.js — then enrolled in the demo
-// course, opted into the leaderboard, and given notebook activity.
+// course, opted into the leaderboard, and given notebook activity:
+//   • notebook_submissions across the 5 *available* course notebooks  → roster +
+//     topic-understanding plot (grouped by notebook_title) + insights
+//   • cell_attempts for every cell of the 2 real notebooks            → the
+//     anonymous "where students struggle" per-cell chart
+//   • point_events (course-scoped)                                    → leaderboard
 //
-// Usage (pooler connection recommended — direct db.<ref> is IPv6-only):
-//   PGHOST=aws-0-<region>.pooler.supabase.com PGPORT=5432 \
-//   PGUSER=postgres.<ref> PGPASSWORD='<db password>' PGDATABASE=postgres \
+// Usage (direct host works; the pooler is also fine):
+//   PGHOST=db.<ref>.supabase.co PGPORT=5432 \
+//   PGUSER=postgres PGPASSWORD='<db password>' PGDATABASE=postgres \
 //   node seed-demo.js
-// or:  DATABASE_URL="postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres" node seed-demo.js
+// or:  DATABASE_URL="postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres" node seed-demo.js
 
 const { Client } = require('pg');
 
 const DEMO = '00000000-0000-0000-0000-000000000001';
 const PASSWORD = 'Student123!'; // fake demo accounts — all share one password
 
-// name, total points, this-week points
+// name, total points, this-week points. Ordered strongest → weakest so the
+// roster, leaderboard and per-topic first-try rates all line up believably.
 const STUDENTS = [
   ['Alice Martin', 342, 128],
   ['Priya Kapoor', 298, 96],
   ['Carlos Ruiz', 251, 74],
   ['Mia Chen', 224, 110],
+  ['Lena Vogt', 205, 88],
   ['Tom Becker', 187, 52],
+  ['Omar Haddad', 168, 60],
   ['James Owusu', 143, 38],
+  ['Nina Petrova', 121, 44],
   ['Sara Lindholm', 96, 40]
 ];
 
-// notebook_key must match what the app records (basename of the opened .ipynb),
-// so seeded + real telemetry line up in the teacher dashboard.
-// cells: per-cell target first-try success rate (0..1); lower = more struggle.
-const NOTEBOOKS = [
-  { key: 'learn_demo.ipynb', title: 'Student performance analysis', cells: [0.92, 0.78, 0.55, 0.7, 0.38] },
-  { key: 'test_analysis.ipynb', title: 'Correlation & regression', cells: [0.83, 0.47, 0.66, 0.6] }
+// The course's *available* notebooks (weeks 1–3). notebook_title is what the
+// teacher's topic-understanding plot groups by, so these read as real topics.
+// `rate` = target class first-try rate (0..1); lower = the class struggled more.
+// Only learn_demo.ipynb + test_analysis.ipynb are real files (real === true) — the
+// per-cell struggle chart is seeded for those; the rest still count toward each
+// student's "notebooks completed" and the topic plot.
+const TOPICS = [
+  { key: 'nb-foundations', title: 'NumPy & pandas intro', cells: 6, rate: 0.86 },
+  { key: 'nb-reproducible', title: 'Reproducible datasets', cells: 5, rate: 0.8 },
+  { key: 'learn_demo.ipynb', title: 'Student performance analysis', cells: 8, rate: 0.66, real: true,
+    cellRates: [0.95, 0.88, 0.72, 0.68, 0.6, 0.5, 0.42, 0.7] },
+  { key: 'nb-eda', title: 'Sales data EDA', cells: 6, rate: 0.54 },
+  { key: 'test_analysis.ipynb', title: 'Correlation & regression', cells: 8, rate: 0.45, real: true,
+    cellRates: [0.9, 0.82, 0.66, 0.58, 0.62, 0.4, 0.36, 0.48] }
 ];
 
 function email(name) {
@@ -65,6 +83,14 @@ async function connectWithRetry(tries = 6) {
       await new Promise(r => setTimeout(r, 8000));
     }
   }
+}
+
+/** How many of the TOPICS a student (rank r, 0 = strongest) has completed:
+ *  everyone did the week-1/2 basics; only stronger students reached week 3. */
+function topicsDoneFor(r, total) {
+  if (r < 4) return TOPICS.length;        // top 4 finished all 5
+  if (r < 7) return TOPICS.length - 1;    // next 3 did 4
+  return TOPICS.length - 2;               // last 3 did 3
 }
 
 (async () => {
@@ -134,11 +160,35 @@ async function connectWithRetry(tries = 6) {
     }
   }
 
-  // ── Anonymous cell attempts (per student, per cell) → struggle data ─
+  // ── Notebook submissions across the available topics ────────────
+  // Drives the per-student roster (notebooks completed, first-try %) and the
+  // teacher's topic-understanding plot (grouped by notebook_title).
+  let subCount = 0;
+  for (let s = 0; s < STUDENTS.length; s++) {
+    const [name] = STUDENTS[s];
+    const skill = 1 - s * 0.02; // stronger students first-try a bit more
+    const done = topicsDoneFor(s, STUDENTS.length);
+    for (let t = 0; t < done; t++) {
+      const nb = TOPICS[t];
+      const firstTry = Math.min(nb.cells, Math.max(1, Math.round(nb.cells * nb.rate * skill)));
+      const xp = firstTry * 4 + (nb.cells - firstTry) * 2;
+      await c.query(
+        `insert into public.notebook_submissions
+           (user_id,course_id,notebook_key,notebook_title,xp_earned,cells_attempted,cells_first_try,completed_at)
+         values ($1,$2,$3,$4,$5,$6,$7, now() - ($8 || ' hours')::interval)`,
+        [ids[name], DEMO, nb.key, nb.title, xp, nb.cells, firstTry, s * 5 + t]
+      );
+      subCount++;
+    }
+  }
+
+  // ── Anonymous cell attempts for the 2 REAL notebooks (all cells) ─
+  // Feeds the anonymous "where students struggle" per-cell chart. One row per
+  // student per cell; ~cellRate of the class succeeds first try, the rest retry.
   const attempts = [];
   const n = STUDENTS.length;
-  for (const nb of NOTEBOOKS) {
-    nb.cells.forEach((rate, ci) => {
+  for (const nb of TOPICS.filter(t => t.real)) {
+    nb.cellRates.forEach((rate, ci) => {
       const succeed = Math.round(rate * n);
       for (let s = 0; s < n; s++) {
         const ok = s < succeed;
@@ -146,7 +196,6 @@ async function connectWithRetry(tries = 6) {
       }
     });
   }
-  // Bulk insert cell_attempts.
   const values = attempts
     .map((_, i) => `($${i * 5 + 1},$${i * 5 + 2},$${i * 5 + 3},$${i * 5 + 4},$${i * 5 + 5})`)
     .join(',');
@@ -155,33 +204,22 @@ async function connectWithRetry(tries = 6) {
     attempts.flat()
   );
 
-  // ── Notebook submissions (one per student per notebook they "did") ─
-  for (let s = 0; s < STUDENTS.length; s++) {
-    const [name] = STUDENTS[s];
-    for (const nb of NOTEBOOKS) {
-      // Higher-ranked students did more first-try; scale by their standing.
-      const firstTry = Math.max(1, Math.round(nb.cells.length * (1 - s / (STUDENTS.length + 1))));
-      const xp = firstTry * 4 + (nb.cells.length - firstTry) * 2;
-      await c.query(
-        `insert into public.notebook_submissions
-           (user_id,course_id,notebook_key,notebook_title,xp_earned,cells_attempted,cells_first_try,completed_at)
-         values ($1,$2,$3,$4,$5,$6,$7, now() - ($8 || ' hours')::interval)`,
-        [ids[name], DEMO, nb.key, nb.title, xp, nb.cells.length, firstTry, s * 6]
-      );
-    }
-  }
-
   await c.query('commit');
 
+  // ── Report ──────────────────────────────────────────────────────
   const v = await c.query(
-    `select p.display_name, p.points, p.leaderboard_opt_in
-       from public.profiles p join public.course_enrollments e on e.user_id=p.user_id
-      where e.course_id=$1 and p.display_name = any($2) order by p.points desc`,
+    `select p.display_name, p.points, count(s.*) as notebooks
+       from public.profiles p
+       join public.course_enrollments e on e.user_id = p.user_id and e.course_id = $1
+       left join public.notebook_submissions s on s.user_id = p.user_id and s.course_id = $1
+      where p.display_name = any($2)
+      group by p.display_name, p.points order by p.points desc`,
     [DEMO, STUDENTS.map(s => s[0])]
   );
   console.log(`Seeded ${v.rows.length} fake students into the demo course:`);
-  for (const r of v.rows) console.log(`  ${String(r.display_name).padEnd(18)} ${String(r.points).padStart(4)} pts  opt-in=${r.leaderboard_opt_in}`);
-  console.log(`Cell attempts: ${attempts.length}, submissions: ${STUDENTS.length * NOTEBOOKS.length}`);
+  for (const r of v.rows)
+    console.log(`  ${String(r.display_name).padEnd(16)} ${String(r.points).padStart(4)} pts  ${r.notebooks} notebooks`);
+  console.log(`Submissions: ${subCount}  ·  cell attempts: ${attempts.length}  ·  topics: ${TOPICS.length}`);
   await c.end();
 })().catch(async e => {
   console.error('ERR:', e.message);
