@@ -1,0 +1,12 @@
+# Python runtime for NotebookMind (Runcell).
+# Installed into the project venv by setup.sh / setup.ps1.
+#
+# jupyterlab + ipykernel provide the app and the Python kernel; numpy/pandas/
+# matplotlib are what the course notebooks actually import — without them every
+# cell run fails with ModuleNotFoundError and the "import numpy as np" cascade
+# leaves np/pd/plt undefined. Keep these in sync with the notebooks' imports.
+jupyterlab>=4.0.0,<5
+ipykernel>=6
+numpy
+pandas
+matplotlib

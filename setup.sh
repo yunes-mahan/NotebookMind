@@ -8,27 +8,34 @@ cd "$(dirname "$0")"
 command -v python3 >/dev/null || { echo "ERROR: python3 not found — install Python >= 3.10"; exit 1; }
 command -v node    >/dev/null || { echo "ERROR: node not found — install Node.js >= 18"; exit 1; }
 
-echo "==> [1/6] Creating virtual environment (venv/)"
+echo "==> [1/7] Creating virtual environment (venv/)"
 [ -d venv ] || python3 -m venv venv
 ./venv/bin/python -m pip install --upgrade pip >/dev/null
 
-echo "==> [2/6] Installing JupyterLab (may take a minute)"
-./venv/bin/pip install -q jupyterlab
+echo "==> [2/7] Installing Python deps: JupyterLab + kernel + numpy/pandas/matplotlib (may take a minute)"
+./venv/bin/pip install -q -r requirements.txt
 
-echo "==> [3/6] Installing JS dependencies"
+echo "==> [3/7] Registering the venv Python as the notebook kernel"
+# CRITICAL: bind the 'python3' kernel to THIS venv's interpreter (absolute path)
+# so notebook cells run against the venv where numpy/pandas/matplotlib live —
+# not some other 'python' on PATH. Without this, every run is a ModuleNotFoundError.
+./venv/bin/python -m ipykernel install --sys-prefix --name python3 \
+  --display-name "Python 3 (NotebookMind)" >/dev/null
+
+echo "==> [4/7] Installing JS dependencies"
 ./venv/bin/jlpm install
 
-echo "==> [4/6] Building the extension (TypeScript -> bundle)"
+echo "==> [5/7] Building the extension (TypeScript -> bundle)"
 ./venv/bin/jlpm run build
 
-echo "==> [5/6] Installing the Python package (registers the extension)"
+echo "==> [6/7] Installing the Python package (registers the extension)"
 ./venv/bin/pip install -q -e .
 # Best-effort live-reload link for older JupyterLab; harmless if it no-ops on
 # newer versions (pip install -e . already registers the extension).
 ./venv/bin/jupyter labextension develop . --overwrite >/dev/null 2>&1 \
   || echo "    (dev-link step skipped — extension already installed via pip)"
 
-echo "==> [6/6] Configuring the backend (.env)"
+echo "==> [7/7] Configuring the backend (.env)"
 if [ -f .env ]; then
   echo "    .env already exists — keeping it."
 else
