@@ -34,7 +34,7 @@ JupyterLab, builds the extension, links it, and copies `.env` (connected mode).
 
 ```bash
 git clone https://github.com/yunes-mahan/NotebookMind.git
-cd NotebookMind && git checkout production
+cd NotebookMind        # the default branch (master) is the current version
 
 # macOS / Linux:
 ./setup.sh   &&  ./run.sh
@@ -51,10 +51,9 @@ The same steps by hand (works on **macOS / Linux** and **Windows** — only the 
 marked lines differ):
 
 ```bash
-# 1) Clone the repo and use the production branch
+# 1) Clone the repo (its default branch, master, is the current version)
 git clone https://github.com/yunes-mahan/NotebookMind.git
 cd NotebookMind
-git checkout production
 
 # 2) Create and activate a Python virtual environment
 python3 -m venv venv
@@ -125,9 +124,11 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
 ### What to try
 - **As the teacher:** sign in → the **Teacher** tab → **Overview**. You get a
   per-student roster ranked by XP, a **Topic understanding** graph (what the class
-  grasped vs. where it struggled), "Where students struggle", and AI insights — all
-  computed from the real database. Under **Weeks & content** you can edit tasks,
-  lock/unlock notebooks (students see the change), and edit notes per cell.
+  grasped vs. where it struggled), "Where students struggle", and an algorithmic
+  summary — all computed live from the real database (the roster & plots update
+  **without a reload** as students join and work). A **Generate AI insights** button
+  produces an AI write-up on demand (it never runs on its own, to save credits).
+  Under **Weeks & content** you can edit tasks, lock/unlock notebooks, and edit notes.
 - **As a student:** sign in → **Course** → open a notebook → **Learn** to solve
   challenges (earns XP, records telemetry) or **Explain** to read cell-by-cell.
   Open **Leaderboard** to see the course ranking. Join another course with an
@@ -138,6 +139,12 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
 - **Account:** **Edit profile** updates your name/photo (persists across reloads). The
   same dialog has a **Delete account** danger zone that permanently removes your account
   and all your data.
+- **Live updates:** open the app in two windows (teacher + student). When the student
+  joins, submits, or posts a comment, the teacher's dashboard and the Explain tabs
+  update **live**, with no reload (Supabase Realtime).
+- **Private notes:** in **Explain**, click a cell's margin to add a yellow **Note**.
+  It saves to your account, survives reload, and is **private to you** — classmates
+  and the teacher never see it (unlike the shared teacher-notes/comments tabs).
 - **Local, no backend:** on the Course screen, **"Bring your own notebook"** lets you
   upload any `.ipynb` and learn it — works with no account/DB.
 
@@ -174,7 +181,7 @@ itself (throwaway course, docs, friend links, avatar restore).
 node test-backend.js
 ```
 
-**What it covers** (22 sections, ~70 checks):
+**What it covers** (23 sections, ~80 checks — 78 pass, 2 skip):
 
 - **Auth** — sign in, invalid-credentials rejected, sign up
 - **Profiles & roles**, and **profile edit persistence** (display name + avatar survive reload)
@@ -187,12 +194,16 @@ node test-backend.js
 - **Cell attempts** + teacher struggle aggregate, **notebook submissions**, **week slides**
 - **Course notebook sync** (teacher publishes content → enrolled student loads it)
 - **Explain-mode notes & comments** persist (teacher notes + peer comments)
+- **Private per-cell notes** — a student's margin notes save to their own account,
+  survive reload, and stay private (another user cannot read them)
 - **AI challenge cache** (a generated challenge reloads without re-running the AI)
 - **Personal file upload** to the account (appears in *My materials*, survives reload)
 - **Friend requests & sharing** — send by email, one-directional (stats hidden) →
   accept → mutual (stats visible) → withdraw; unknown-email and self-request rejected
 - **Delete account** — full round-trip: create a throwaway user, delete via the RPC,
   verify it's gone and can no longer sign in (see the DB note below)
+- **Realtime (live updates)** — the collaboration tables are in the realtime
+  publication, and a live INSERT event is delivered over the socket
 - **AI generation** — a live LLM completion (needs an AI key)
 
 **Run everything, including the live AI + destructive delete tests:**
@@ -240,8 +251,8 @@ webpack bundle — running only the bundle step does **not** pick up `.ts` edits
 |-------|-------|------|
 | Frontend | `src/*.ts` | Screens (home, learn, explain, reader, teacher, leaderboard), course store, XP, Gemini/Anthropic calls |
 | Server ext | `notebookmind/` | Serves API keys + Supabase config to the frontend (`/notebookmind/config`), reads a local `.env` |
-| Backend | Supabase (Postgres) | `profiles`, `courses`, `course_enrollments`, `course_weeks`, `course_notebooks`, `documents`, `section_notes`, `flashcards`, `quiz_sessions`, `point_events`, `notebook_submissions`, `cell_attempts`, `cell_comments`, `notebook_challenges`, `friend_shares`; RPCs `get_course_leaderboard`, `join_course_by_invite`, `increment_points`, `get_course_student_performance`, `get_course_topic_stats`, `request_friend`, `get_my_friends`, `delete_my_account` |
-| DB setup | `supabase-migration.sql` + `migration2.sql … migration19.sql` | Schema + RLS + grants + RPCs (already applied to the shared project) |
+| Backend | Supabase (Postgres) | `profiles`, `courses`, `course_enrollments`, `course_weeks`, `course_notebooks`, `documents`, `section_notes`, `flashcards`, `quiz_sessions`, `point_events`, `notebook_submissions`, `cell_attempts`, `cell_comments`, `notebook_challenges`, `friend_shares`, `cell_notes`; RPCs `get_course_leaderboard`, `join_course_by_invite`, `increment_points`, `get_course_student_performance`, `get_course_topic_stats`, `request_friend`, `get_my_friends`, `delete_my_account`. Live updates via **Supabase Realtime** (migration 20) on the collaboration tables. |
+| DB setup | `supabase-migration.sql` + `migration2.sql … migration21.sql` | Schema + RLS + grants + RPCs + realtime (already applied to the shared project) |
 | Seed | `seed-demo.js`, `seed-comments.js` | Fake classmates + demo-course activity, and seeded Explain-mode comments |
 
 The Supabase schema is **already provisioned** on the shared project, so reviewers do
