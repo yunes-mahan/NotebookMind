@@ -320,7 +320,12 @@ export function renderExplain(host: HTMLElement, app: NotebookMindApp): void {
         textWrap.appendChild(renderMarkdown(cached));
       } else {
         textWrap.appendChild(spinner('Generating explanation…'));
-        void explainCell(cells[i], 'intermediate')
+        // Primarily the cell itself, but give the model the whole notebook so
+        // the explanation reflects how this cell fits into the bigger picture.
+        const nbContext = cells
+          .map((c, idx) => `# Cell ${idx + 1}${idx === i ? '  <-- explain this one' : ''}\n${c}`)
+          .join('\n\n');
+        void explainCell(cells[i], 'intermediate', nbContext)
           .then(text => {
             explanationCache.set(i, text);
             if ((tabState.get(i) ?? 'ai') === 'ai') {

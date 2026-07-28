@@ -101,19 +101,26 @@ function isDue(c: IFlashcard): boolean {
 
 function splitIntoSections(pages: IPageData[]): ISection[] {
   if (!pages.length) return [];
-  const count = Math.min(6, Math.max(2, Math.ceil(pages.length / 4)));
+  // Chapter the FULL deck into sensible chapters of ~8 slides each. Small decks
+  // stay a single chapter (no forced 2-way split); big decks grow to as many
+  // chapters as needed (no hard cap), so nothing is ever hidden or cut off.
+  const TARGET_PER_CHAPTER = 8;
+  const count = Math.max(1, Math.ceil(pages.length / TARGET_PER_CHAPTER));
   const perSection = Math.ceil(pages.length / count);
   const sections: ISection[] = [];
   for (let i = 0; i < count; i++) {
     const start = i * perSection;
-    const end = Math.min(start + perSection, pages.length);
     if (start >= pages.length) break;
+    const end = Math.min(start + perSection, pages.length);
     const sectionPages = pages.slice(start, end);
     const text = sectionPages.map(p => p.text).join('\n').trim();
-    const firstLine = text.split('\n')[0]?.trim().substring(0, 50) || `Section ${i + 1}`;
+    const firstLine = text.split('\n')[0]?.trim().substring(0, 50) || `Chapter ${i + 1}`;
     sections.push({
       index: i,
-      title: `Section ${i + 1}${firstLine && firstLine.length > 6 ? ` — ${firstLine}` : ''}`,
+      title:
+        count === 1
+          ? 'Slides'
+          : `Chapter ${i + 1}${firstLine && firstLine.length > 6 ? ` — ${firstLine}` : ''}`,
       pages: sectionPages,
       text,
       understood: false
@@ -519,12 +526,14 @@ function _renderFull(content: HTMLElement): void {
   if (page?.deckSlide) {
     slide = renderDeckSlide(page.deckSlide);
   } else if (page?.imageBase64) {
+    // Render the real slide at its true aspect ratio: full width up to a
+    // slide-sized cap, centered, never stretched or cropped.
     slide = document.createElement('div');
     slide.style.cssText =
-      'background:var(--surface-card);border:1px solid var(--border-default);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.06);overflow:hidden';
+      'width:100%;max-width:1000px;margin:0 auto;background:var(--surface-card);border:1px solid var(--border-default);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.06);overflow:hidden';
     const img = document.createElement('img');
     img.src = `data:image/jpeg;base64,${page.imageBase64}`;
-    img.style.cssText = 'display:block;width:100%;height:auto';
+    img.style.cssText = 'display:block;width:100%;height:auto;background:#fff';
     slide.appendChild(img);
   } else {
     slide = document.createElement('div');
