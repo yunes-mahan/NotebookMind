@@ -34,7 +34,7 @@ import { renderBoard } from './screenBoard';
 import { renderFriends } from './screenFriends';
 import { renderCourseMap } from './screenCourseMap';
 import { renderTeacher } from './screenTeacher';
-import { renderReader, loadReaderWithPages, showReaderShortcuts } from './screenReader';
+import { renderReader, loadReaderWithPages, showReaderShortcuts, uninstallReaderKeyboard } from './screenReader';
 import { clearRealtime } from './realtime';
 import { IPageData } from './pdfExtract';
 
@@ -164,6 +164,7 @@ export class NotebookMindApp extends Widget {
 
   navigate(screen: Screen): void {
     clearRealtime(); // tear down the previous screen's live subscriptions
+    uninstallReaderKeyboard(); // reader shortcuts must not fire on other screens
     this._screen = screen;
     this._content.innerHTML = '';
     this._content.scrollTop = 0;

@@ -1827,8 +1827,13 @@ function _btn(
 
 function _installKeyboard(): void {
   const handler = (e: KeyboardEvent) => {
-    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    const el = document.activeElement as HTMLElement | null;
+    const tag = (el?.tagName || '').toLowerCase();
+    // Never hijack typing. Skip form fields AND rich editors — the notebook's
+    // code editor is CodeMirror, a contenteditable <div> (not a <textarea>), so
+    // without this an arrow/letter key while coding would jump the slide/quiz.
     if (['input', 'textarea', 'select'].includes(tag)) return;
+    if (el?.isContentEditable || el?.closest?.('.cm-editor')) return;
     if (!state.doc) return;
 
     const studyOverlay = document.querySelector('.nm-study-overlay') as
@@ -1893,6 +1898,18 @@ function _installKeyboard(): void {
 }
 
 let _kbHandler: ((e: KeyboardEvent) => void) | null = null;
+
+/**
+ * Remove the reader's global key handler. The shell calls this on every
+ * navigation so reader shortcuts (arrows, q/f/u, …) never fire on other screens
+ * — most importantly while typing code in a notebook after leaving the reader.
+ */
+export function uninstallReaderKeyboard(): void {
+  if (_kbHandler) {
+    document.removeEventListener('keydown', _kbHandler as EventListener);
+    _kbHandler = null;
+  }
+}
 
 export function showReaderShortcuts(): void {
   const overlay = document.createElement('div');
