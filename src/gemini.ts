@@ -81,14 +81,21 @@ async function generateText(prompt: string): Promise<string> {
 
 export async function explainCell(
   cellSource: string,
-  level: 'beginner' | 'intermediate' | 'expert'
+  level: 'beginner' | 'intermediate' | 'expert',
+  notebookContext?: string
 ): Promise<string> {
-  const prompt = `You are a Python tutor. Explain the following code cell at ${level} level. Be concise, max 3 paragraphs. Use simple language for beginner, technical depth for expert.
+  const contextBlock = notebookContext
+    ? `\n\nFor context, here is the whole notebook this cell belongs to. Use it to ground your explanation — what this cell relies on from earlier cells, and what it sets up for later — but keep the explanation focused on the cell above, not the whole notebook:
+\`\`\`python
+${notebookContext}
+\`\`\``
+    : '';
+  const prompt = `You are a Python tutor. Explain the following code cell at ${level} level. Focus primarily on THIS cell, but take the surrounding notebook into account so your explanation reflects where the cell fits. Be concise, max 3 paragraphs. Use simple language for beginner, technical depth for expert.
 
-Code:
+Cell to explain:
 \`\`\`python
 ${cellSource}
-\`\`\``;
+\`\`\`${contextBlock}`;
   return generateText(prompt);
 }
 
