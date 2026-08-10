@@ -13,6 +13,22 @@ for auth, courses, enrollment, XP, leaderboards and analytics.
 
 ---
 
+## 0. Demo video & report
+
+| What | Where |
+|------|-------|
+| **Demo video** — full walkthrough: setup, Learn mode, Explain mode, the teacher dashboard and live updates | [`docs/runcell-demo.mp4`](docs/runcell-demo.mp4) (78 MB) |
+| **Report (PDF)** — the submitted paper | [`report/report.pdf`](report/report.pdf) |
+| **Report source** — ACM LaTeX, compiles on Overleaf with pdfLaTeX | [`report/report.tex`](report/report.tex), [`report/references.bib`](report/references.bib), [`report/figures/`](report/figures) |
+
+GitHub does not stream files this large in the browser preview — use the
+**Download** button on the video, or clone the repo and play it locally.
+
+**In a hurry?** Watch the video, then follow section 2 (Option A) — the one
+command setup — and sign in with the teacher account from section 3.
+
+---
+
 ## 1. Prerequisites
 
 Install these first (any recent version):
@@ -96,7 +112,7 @@ copied `.env` connects the app to the shared Supabase project. (You can reopen t
 panel any time from the Command Palette → "Open Runcell".)
 
 > **No `.env`?** The app still runs, but in **demo mode**: any email/password works
-> and nothing is saved. Copy `.env.example` to `.env` (step 5) for the real,
+> and nothing is saved. Copy `.env.example` to `.env` (step 6) for the real,
 > connected experience.
 
 ---
@@ -121,8 +137,18 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
 > Sign in with these accounts — **no signup needed**. (Creating a brand-new account
 > triggers a confirmation email, which is rate-limited on the shared project.)
 
+> ### ⚠️ The Teacher tab asks for a password: type `123`
+>
+> Signing in as the teacher account is **not** enough — opening the **Teacher**
+> tab shows a second, app-level prompt. The password is **`123`**.
+>
+> This is a deliberate prototype gate (hardcoded at `src/nbApp.ts:984`), not a
+> security feature — it only stops a curious student from wandering into the
+> dashboard during a demo. It is **not** the account password.
+
 ### What to try
-- **As the teacher:** sign in → the **Teacher** tab → **Overview**. You get a
+- **As the teacher:** sign in → the **Teacher** tab → enter **`123`** at the
+  prompt → **Overview**. You get a
   per-student roster ranked by XP, a **Topic understanding** graph (what the class
   grasped vs. where it struggled), "Where students struggle", and an algorithmic
   summary — all computed live from the real database (the roster & plots update
@@ -148,25 +174,62 @@ Carlos, Mia, Tom, James, Sara — emails `nm.fake.<first>@example.com`, password
 - **Local, no backend:** on the Course screen, **"Bring your own notebook"** lets you
   upload any `.ipynb` and learn it — works with no account/DB.
 
-### AI (optional)
-Everything above — **accounts, courses, data storage, leaderboard, teacher analytics,
-Learn/Explain** — works with **no AI key**: challenges, explanations, quizzes and
-insights fall back to deterministic built-in output. To test **real LLM generation**,
-**open the `.env` file you created in step 5** (in the project root, next to
-`README.md`), set the key on the `GEMINI_API_KEY` line, save, and restart JupyterLab:
+### AI key — exactly where to put it (optional)
+
+**You do not need an AI key to review this project.** Everything above —
+accounts, courses, data storage, leaderboard, teacher analytics, Learn and
+Explain — works without one: challenges, explanations, quizzes and insights
+fall back to deterministic built-in output. Add a key only if you want to see
+**real LLM generation**.
+
+We intentionally ship **no** AI key: provider keys are billable and must never be
+committed to a public repository. A free Gemini key takes about two minutes.
+
+**Four steps:**
+
+1. **Get a free key** at <https://aistudio.google.com/apikey> (Google AI Studio).
+2. **Open the file `.env`** — it is in the **project root**, the same folder as
+   this `README.md`. You created it in **step 6** of section 2 by copying
+   `.env.example`. If it is missing, copy it now:
+   ```bash
+   cp .env.example .env      # Windows: copy .env.example .env
+   ```
+   > `.env` is deliberately git-ignored, so it never appears on GitHub. That is
+   > why you must create it locally — and why your key stays yours.
+3. **Find the line that starts with `GEMINI_API_KEY=`** and paste your key after
+   the `=`, with no quotes and no spaces. The file already contains this line —
+   edit it, don't add a second one:
+   ```bash
+   # .env  — read by the server (notebookmind/config.py) and passed to the app
+   GEMINI_API_KEY=AIza...your_key_here
+
+   # …or paste an Anthropic key on the SAME line instead — it is auto-detected
+   # by the `sk-ant-` prefix, no other change needed:
+   # GEMINI_API_KEY=sk-ant-...
+   ```
+4. **Save the file and restart JupyterLab.** The key is read once at server
+   start, so a browser refresh alone will not pick it up.
+
+**Check it worked:** open **Learn** on any notebook and generate a challenge.
+With a key you get varied, notebook-specific tasks; without one you get the
+same deterministic built-in exercises every time. You can also confirm the
+server sees it — replace `<token>` with the one from your JupyterLab URL:
 
 ```bash
-# .env  — the server (notebookmind/config.py) reads this and passes it to the app
-GEMINI_API_KEY=your_google_ai_studio_key     # free tier: https://aistudio.google.com/apikey
-# …or paste an Anthropic key on the same line instead (auto-detected):
-# GEMINI_API_KEY=sk-ant-...
+curl "http://localhost:8888/notebookmind/config?token=<token>"
 ```
 
-(The same `.env` holds `SUPABASE_URL` / `SUPABASE_ANON_KEY`, already filled in from
-`.env.example`. An optional `ELEVENLABS_API_KEY` line enables text-to-speech.)
+The `gemini_api_key` field comes back non-empty once the key is loaded (it is
+`""` when no key is set).
 
-We intentionally do **not** ship an AI key — provider keys are billable and must not be
-committed. A free Gemini key takes ~2 minutes to create.
+> ⚠️ That endpoint returns the key **in plaintext** — the frontend needs it to
+> call the provider directly. It is authenticated by your JupyterLab token and
+> only ever served to `localhost`, but do not paste its output into a bug report,
+> a screenshot or a chat.
+
+The same `.env` also holds `SUPABASE_URL` / `SUPABASE_ANON_KEY`, already filled in
+from `.env.example` — leave those alone. An optional `ELEVENLABS_API_KEY` line
+enables text-to-speech in the reader.
 
 ---
 

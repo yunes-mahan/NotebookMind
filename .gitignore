@@ -138,3 +138,6 @@ run-migration2.js
 file-to-web-app-generator-main/
 *.zip
 venv/
+
+# Private co-author coordination notes — not part of the public deliverable
+report/notes-for-johannes.md
