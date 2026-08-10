@@ -37,9 +37,10 @@ changes are grouped by area rather than versioned releases. Newest first.
   published to enrolled students.
 
 ### Tooling, tests & setup
-- `test-backend.js`: 23-section, ~80-check suite against the real backend
-  (78 pass, 2 skip) covering every feature above, incl. a destructive
-  delete-account round-trip and a live Realtime event.
+- `test-backend.js`: 23-section, 76-check suite against the real backend
+  (71 pass, 5 skip on a default run) covering every feature above; the skips
+  unlock with `NM_DB_URL` (destructive delete-account round-trip, realtime
+  publication membership) and an AI key (live generation).
 - **Fixed: notebooks never ran** — installed `numpy`/`pandas`/`matplotlib` and
   bound the kernel to the venv's Python (was resolving to a package-less global
   Python, causing `ModuleNotFoundError` and the `np`-undefined cascade).

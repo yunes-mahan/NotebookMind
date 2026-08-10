@@ -181,7 +181,8 @@ itself (throwaway course, docs, friend links, avatar restore).
 node test-backend.js
 ```
 
-**What it covers** (23 sections, ~80 checks — 78 pass, 2 skip):
+**What it covers** (23 sections, 76 checks — a default run reports **71 pass, 5 skip**;
+the 5 skips all unlock with the extra credentials described below):
 
 - **Auth** — sign in, invalid-credentials rejected, sign up
 - **Profiles & roles**, and **profile edit persistence** (display name + avatar survive reload)
@@ -215,7 +216,7 @@ NM_DB_URL="postgresql://postgres:<PASSWORD>@db.<ref>.supabase.co:5432/postgres" 
 node test-backend.js
 ```
 
-Expected: **all checks pass**. A few may **SKIP**, which is normal:
+Expected: **all checks pass**. The five **SKIP**s on a default run are normal:
 
 - *Sign up* skips when Supabase's hourly confirmation-email limit is hit (a project
   throttle, not a failure) — or set `NM_TEST_SIGNUP=0` to skip it deliberately.
@@ -224,6 +225,9 @@ Expected: **all checks pass**. A few may **SKIP**, which is normal:
   via **`NM_DB_URL`** (or `DATABASE_URL`) — the public anon key can't create the
   confirmed throwaway user the test needs. Without it, the suite still verifies the
   `delete_my_account` RPC is deployed (a safe, non-destructive probe).
+- *Realtime publication membership* skips unless `NM_DB_URL` is given — reading
+  `pg_publication_tables` needs a direct Postgres connection. The companion check
+  (a live INSERT actually delivered over the socket) always runs.
 - *Local (on-device) upload* is IndexedDB — browser-only, so it's verified in the UI.
 
 It targets the shared project + test accounts by default; override with
@@ -285,3 +289,7 @@ Postgres connection string).
   creating a new one.
 - **Backend tests fail on "project reachable"** → the free Supabase project may be
   cold-starting; re-run `node test-backend.js`.
+- **Backend tests fail only on "Realtime delivers a live INSERT event"** → the
+  Realtime socket subscribes but the event can exceed the timeout on a cold or
+  busy free project. It is the one timing-dependent check in the suite; re-run
+  `node test-backend.js`.
