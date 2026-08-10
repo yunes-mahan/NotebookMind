@@ -126,6 +126,10 @@ Disposable accounts on the shared Supabase project (the publishable/anon key in
 |------|-------|----------|
 | **Teacher** | `notebookmind.prof@gmail.com` | `Teacher123!` |
 | **Student** | `notebookmind.student@gmail.com` | `Student123!` |
+| **Teacher tab gate** | *(no email — a prompt inside the app)* | **`123`** |
+
+The third row is not an account. After signing in as the teacher, opening the
+**Teacher** tab shows a second prompt — enter **`123`**. See the note below.
 
 **Demo course:** *Data Science Fundamentals* (code `DS101`) — **invite code `DEMO2025`**.
 The teacher owns it; the student (and 7 seeded classmates) are enrolled.
