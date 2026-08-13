@@ -13,16 +13,16 @@ for auth, courses, enrollment, XP, leaderboards and analytics.
 
 ---
 
-## 0. Demo video & report
+## 0. Demo video
 
-| What | Where |
-|------|-------|
-| **Demo video** — full walkthrough: setup, Learn mode, Explain mode, the teacher dashboard and live updates | [`docs/runcell-demo.mp4`](docs/runcell-demo.mp4) (78 MB) |
-| **Report (PDF)** — the submitted paper | [`report/report.pdf`](report/report.pdf) |
-| **Report source** — ACM LaTeX, compiles on Overleaf with pdfLaTeX | [`report/report.tex`](report/report.tex), [`report/references.bib`](report/references.bib), [`report/figures/`](report/figures) |
+**Full walkthrough** — setup, Learn mode, Explain mode, the teacher dashboard
+and live updates: [`docs/runcell-demo.mp4`](docs/runcell-demo.mp4) (78 MB).
 
-GitHub does not stream files this large in the browser preview — use the
-**Download** button on the video, or clone the repo and play it locally.
+GitHub does not play files this large in the browser preview — use the
+**Download** button, or clone the repo and play it locally.
+
+> **The written report is not in this repository.** It is submitted separately,
+> alongside this repository's link.
 
 **In a hurry?** Watch the video, then follow section 2 (Option A) — the one
 command setup — and sign in with the teacher account from section 3.
